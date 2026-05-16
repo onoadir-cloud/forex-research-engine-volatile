@@ -1,32 +1,20 @@
 # Multi-Symbol Volatility Research (Parallel, No Strategy Changes)
 
-This repository now includes a minimal batch runner to execute the *existing* single-symbol research flow across a fixed symbol list while keeping strategy logic unchanged.
+This repository includes a fixed-parameter batch runner that executes the existing single-symbol research flow across the symbol list from `symbols_config.json`.
 
 ## Symbols
-Configured in `symbols_config.json`:
-- EURUSD (baseline)
-- GBPUSD
-- USDJPY
-- EURJPY
-- GBPJPY
-- AUDJPY
-- GBPAUD
-- GBPNZD
+Configured in `symbols_config.json`.
 
 ## Run
 ```bash
-python scripts/run_multisymbol_batch.py \
-  --single-symbol-cmd "python YOUR_EXISTING_SINGLE_SYMBOL_SCRIPT.py --symbol {symbol}" \
-  --metrics-template "results/{symbol}/metrics.json" \
-  --report reports/multi_symbol_comparison.md
+python scripts/run_multisymbol_batch.py
 ```
 
-Expected per-symbol metrics JSON fields:
-- `oos_expectancy_after_costs`
-- `profit_factor`
-- `max_drawdown`
-- `num_trades`
-- `parameter_stability`
-- `survives_2x_cost_stress`
+For each symbol, the runner:
+1. Checks for `data/{symbol}_M15_MT5_5Y.csv`.
+2. If present, runs:
+   `python run_research.py --csv data/{symbol}_M15_MT5_5Y.csv --symbol {symbol} --base-timeframe M15 --spread-pips 1.2 --slippage-pips 0.2 --output-dir reports/{symbol}`
+3. Writes per-symbol status into:
+   `reports/multisymbol_batch_summary.json`
 
-The report ranks symbols by rank-sum (lower is better) over those metrics.
+If data is missing for a symbol, status is `missing_data` and processing continues.
