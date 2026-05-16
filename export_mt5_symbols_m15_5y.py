@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -19,8 +19,6 @@ except ImportError as exc:  # pragma: no cover
 SYMBOLS_CONFIG_PATH = Path("symbols_config.json")
 OUTPUT_DIR = Path("data")
 TIMEFRAME = mt5.TIMEFRAME_M15
-YEARS_BACK = 5
-
 
 @dataclass
 class ExportResult:
@@ -65,7 +63,7 @@ def broker_symbol_hint(raw_symbol: str) -> str:
     )
 
 
-def export_symbol(symbol: str, utc_from: datetime, utc_to: datetime) -> ExportResult:
+def export_symbol(symbol: str) -> ExportResult:
     if not mt5.symbol_select(symbol, True):
         return ExportResult(
             symbol=symbol,
@@ -76,12 +74,12 @@ def export_symbol(symbol: str, utc_from: datetime, utc_to: datetime) -> ExportRe
             output_path=None,
         )
 
-    rates = mt5.copy_rates_range(symbol, TIMEFRAME, utc_from, utc_to)
+    rates = mt5.copy_rates_from_pos(symbol, TIMEFRAME, 0, 100000)
     if rates is None:
         code, msg = mt5.last_error()
         return ExportResult(
             symbol=symbol,
-            status=f"FAIL: MT5 copy_rates_range error {code}: {msg}",
+            status=f"FAIL: MT5 copy_rates_from_pos error {code}: {msg}",
             rows_exported=0,
             first_datetime=None,
             last_datetime=None,
@@ -89,9 +87,10 @@ def export_symbol(symbol: str, utc_from: datetime, utc_to: datetime) -> ExportRe
         )
 
     if len(rates) == 0:
+        code, msg = mt5.last_error()
         return ExportResult(
             symbol=symbol,
-            status="FAIL: MT5 returned 0 rows",
+            status=f"FAIL: MT5 returned 0 rows; last_error {code}: {msg}",
             rows_exported=0,
             first_datetime=None,
             last_datetime=None,
@@ -148,18 +147,17 @@ def main() -> None:
         raise SystemExit(f"Failed to initialize MetaTrader5 terminal: {code} {msg}")
 
     try:
-        utc_to = datetime.utcnow()
-        utc_from = utc_to - timedelta(days=365 * YEARS_BACK)
+        now_utc = datetime.utcnow()
 
         print(
-            f"Exporting M15 OHLC for ~{YEARS_BACK} years from {utc_from.isoformat()} to {utc_to.isoformat()}"
+            f"Exporting M15 OHLC using copy_rates_from_pos(0, 100000) at {now_utc.isoformat()} UTC"
         )
         print(f"Symbols loaded from {SYMBOLS_CONFIG_PATH}: {', '.join(symbols)}")
 
         results: List[ExportResult] = []
         for symbol in symbols:
             print(f"\n[{symbol}] exporting...")
-            result = export_symbol(symbol, utc_from=utc_from, utc_to=utc_to)
+            result = export_symbol(symbol)
             results.append(result)
             print(f"[{symbol}] {result.status}; rows={result.rows_exported}")
 
