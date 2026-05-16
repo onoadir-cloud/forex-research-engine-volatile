@@ -19,6 +19,9 @@ except ImportError as exc:  # pragma: no cover
 SYMBOLS_CONFIG_PATH = Path("symbols_config.json")
 OUTPUT_DIR = Path("data")
 TIMEFRAME = mt5.TIMEFRAME_M15
+TARGET_BARS = 100000
+CHUNK_SIZES = [10000, 5000, 2000, 1000, 500, 100]
+
 
 @dataclass
 class ExportResult:
@@ -28,6 +31,7 @@ class ExportResult:
     first_datetime: Optional[str]
     last_datetime: Optional[str]
     output_path: Optional[str]
+    chunk_size_used: Optional[int]
 
 
 def load_symbols(config_path: Path) -> List[str]:
@@ -63,6 +67,45 @@ def broker_symbol_hint(raw_symbol: str) -> str:
     )
 
 
+def _fetch_chunked_rates(symbol: str) -> tuple[Optional[List], Optional[int], Optional[tuple[int, str]], bool]:
+    for chunk_size in CHUNK_SIZES:
+        chunks = []
+        start_pos = 0
+        hard_fail = False
+
+        while start_pos < TARGET_BARS:
+            bars_to_fetch = min(chunk_size, TARGET_BARS - start_pos)
+            rates = mt5.copy_rates_from_pos(symbol, TIMEFRAME, start_pos, bars_to_fetch)
+
+            if rates is None:
+                code, msg = mt5.last_error()
+                if start_pos == 0:
+                    hard_fail = True
+                    break
+                # Data collection was partially successful; stop gracefully.
+                break
+
+            rows = len(rates)
+            if rows == 0:
+                break
+
+            chunks.append(rates)
+            start_pos += rows
+
+            # Safety in case MT5 responds with malformed data.
+            if rows > bars_to_fetch:
+                break
+
+        if hard_fail:
+            continue
+
+        if chunks:
+            return chunks, chunk_size, None, False
+
+    code, msg = mt5.last_error()
+    return None, None, (code, msg), True
+
+
 def export_symbol(symbol: str) -> ExportResult:
     if not mt5.symbol_select(symbol, True):
         return ExportResult(
@@ -72,11 +115,12 @@ def export_symbol(symbol: str) -> ExportResult:
             first_datetime=None,
             last_datetime=None,
             output_path=None,
+            chunk_size_used=None,
         )
 
-    rates = mt5.copy_rates_from_pos(symbol, TIMEFRAME, 0, 100000)
-    if rates is None:
-        code, msg = mt5.last_error()
+    chunks, chunk_size_used, last_err, hard_fail = _fetch_chunked_rates(symbol)
+    if hard_fail or not chunks:
+        code, msg = last_err if last_err is not None else mt5.last_error()
         return ExportResult(
             symbol=symbol,
             status=f"FAIL: MT5 copy_rates_from_pos error {code}: {msg}",
@@ -84,9 +128,11 @@ def export_symbol(symbol: str) -> ExportResult:
             first_datetime=None,
             last_datetime=None,
             output_path=None,
+            chunk_size_used=None,
         )
 
-    if len(rates) == 0:
+    df = pd.concat([pd.DataFrame(chunk) for chunk in chunks], ignore_index=True)
+    if df.empty:
         code, msg = mt5.last_error()
         return ExportResult(
             symbol=symbol,
@@ -95,9 +141,9 @@ def export_symbol(symbol: str) -> ExportResult:
             first_datetime=None,
             last_datetime=None,
             output_path=None,
+            chunk_size_used=chunk_size_used,
         )
 
-    df = pd.DataFrame(rates)
     df["datetime"] = pd.to_datetime(df["time"], unit="s", utc=True).dt.tz_convert(None)
 
     export_cols = ["datetime", "open", "high", "low", "close"]
@@ -106,7 +152,12 @@ def export_symbol(symbol: str) -> ExportResult:
         df = df.rename(columns={"tick_volume": "volume"})
         export_cols.append("volume")
 
-    out_df = df[export_cols].sort_values("datetime").reset_index(drop=True)
+    out_df = (
+        df[export_cols]
+        .drop_duplicates(subset=["datetime"])
+        .sort_values("datetime")
+        .reset_index(drop=True)
+    )
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     output_path = OUTPUT_DIR / f"{symbol}_M15_MT5_5Y.csv"
@@ -119,6 +170,7 @@ def export_symbol(symbol: str) -> ExportResult:
         first_datetime=out_df["datetime"].iloc[0].isoformat(sep=" "),
         last_datetime=out_df["datetime"].iloc[-1].isoformat(sep=" "),
         output_path=str(output_path),
+        chunk_size_used=chunk_size_used,
     )
 
 
@@ -134,6 +186,7 @@ def print_summary(results: List[ExportResult]) -> None:
                     f"first_datetime={result.first_datetime or '-'}",
                     f"last_datetime={result.last_datetime or '-'}",
                     f"output_path={result.output_path or '-'}",
+                    f"chunk_size_used={result.chunk_size_used or '-'}",
                 ]
             )
         )
@@ -150,8 +203,9 @@ def main() -> None:
         now_utc = datetime.utcnow()
 
         print(
-            f"Exporting M15 OHLC using copy_rates_from_pos(0, 100000) at {now_utc.isoformat()} UTC"
+            f"Exporting M15 OHLC using chunked copy_rates_from_pos target={TARGET_BARS} at {now_utc.isoformat()} UTC"
         )
+        print(f"Chunk fallback sizes: {CHUNK_SIZES}")
         print(f"Symbols loaded from {SYMBOLS_CONFIG_PATH}: {', '.join(symbols)}")
 
         results: List[ExportResult] = []
@@ -159,7 +213,9 @@ def main() -> None:
             print(f"\n[{symbol}] exporting...")
             result = export_symbol(symbol)
             results.append(result)
-            print(f"[{symbol}] {result.status}; rows={result.rows_exported}")
+            print(
+                f"[{symbol}] {result.status}; rows={result.rows_exported}; chunk_size_used={result.chunk_size_used or '-'}"
+            )
 
         print_summary(results)
     finally:
