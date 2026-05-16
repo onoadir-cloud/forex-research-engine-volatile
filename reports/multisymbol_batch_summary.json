@@ -1,0 +1,85 @@
+{
+  "symbols": [
+    {
+      "symbol": "EURUSD",
+      "status": "missing_data",
+      "data_file": "data/EURUSD_M15_MT5_5Y.csv",
+      "data_file_found": false,
+      "command": null,
+      "output_dir": "reports/EURUSD",
+      "generated_report_paths": [],
+      "return_code": null
+    },
+    {
+      "symbol": "GBPUSD",
+      "status": "missing_data",
+      "data_file": "data/GBPUSD_M15_MT5_5Y.csv",
+      "data_file_found": false,
+      "command": null,
+      "output_dir": "reports/GBPUSD",
+      "generated_report_paths": [],
+      "return_code": null
+    },
+    {
+      "symbol": "USDJPY",
+      "status": "missing_data",
+      "data_file": "data/USDJPY_M15_MT5_5Y.csv",
+      "data_file_found": false,
+      "command": null,
+      "output_dir": "reports/USDJPY",
+      "generated_report_paths": [],
+      "return_code": null
+    },
+    {
+      "symbol": "EURJPY",
+      "status": "missing_data",
+      "data_file": "data/EURJPY_M15_MT5_5Y.csv",
+      "data_file_found": false,
+      "command": null,
+      "output_dir": "reports/EURJPY",
+      "generated_report_paths": [],
+      "return_code": null
+    },
+    {
+      "symbol": "GBPJPY",
+      "status": "missing_data",
+      "data_file": "data/GBPJPY_M15_MT5_5Y.csv",
+      "data_file_found": false,
+      "command": null,
+      "output_dir": "reports/GBPJPY",
+      "generated_report_paths": [],
+      "return_code": null
+    },
+    {
+      "symbol": "AUDJPY",
+      "status": "missing_data",
+      "data_file": "data/AUDJPY_M15_MT5_5Y.csv",
+      "data_file_found": false,
+      "command": null,
+      "output_dir": "reports/AUDJPY",
+      "generated_report_paths": [],
+      "return_code": null
+    },
+    {
+      "symbol": "GBPAUD",
+      "status": "missing_data",
+      "data_file": "data/GBPAUD_M15_MT5_5Y.csv",
+      "data_file_found": false,
+      "command": null,
+      "output_dir": "reports/GBPAUD",
+      "generated_report_paths": [],
+      "return_code": null
+    },
+    {
+      "symbol": "GBPNZD",
+      "status": "missing_data",
+      "data_file": "data/GBPNZD_M15_MT5_5Y.csv",
+      "data_file_found": false,
+      "command": null,
+      "output_dir": "reports/GBPNZD",
+      "generated_report_paths": [],
+      "return_code": null
+    }
+  ],
+  "total_symbols": 8
+}
