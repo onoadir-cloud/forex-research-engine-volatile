@@ -1,0 +1,13 @@
+{
+  "baseline_symbol": "EURUSD",
+  "symbols": [
+    "EURUSD",
+    "GBPUSD",
+    "USDJPY",
+    "EURJPY",
+    "GBPJPY",
+    "AUDJPY",
+    "GBPAUD",
+    "GBPNZD"
+  ]
+}
