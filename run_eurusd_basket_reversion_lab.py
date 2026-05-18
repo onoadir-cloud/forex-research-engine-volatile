@@ -296,30 +296,6 @@ def simulate_basket(
         high = float(row["high"])
         low = float(row["low"])
 
-        adverse, favorable = floating_excursions(direction, high, low, entries, sizes)
-        max_adverse = max(max_adverse, adverse)
-        max_favorable = max(max_favorable, favorable)
-
-        last_layer = entries[-1]
-        if direction == "LONG":
-            failure_price = last_layer - params.max_basket_adverse_pips * PIP_SIZE
-            tp_price = weighted_average(entries, sizes) + params.group_tp_pips * PIP_SIZE
-            failure_hit = low <= failure_price
-            tp_hit = high >= tp_price
-        else:
-            failure_price = last_layer + params.max_basket_adverse_pips * PIP_SIZE
-            tp_price = weighted_average(entries, sizes) - params.group_tp_pips * PIP_SIZE
-            failure_hit = high >= failure_price
-            tp_hit = low <= tp_price
-
-        # Conservative same-bar handling: if the basket TP and adverse failure are
-        # both reachable in one candle, the adverse failure is booked first.
-        if failure_hit:
-            exit_reason = "adverse_failure"
-            exit_price = failure_price
-            exit_idx = idx
-            break
-
         while len(entries) < params.max_layers:
             next_layer_price = entries[-1] - params.layer_distance_pips * PIP_SIZE if direction == "LONG" else entries[-1] + params.layer_distance_pips * PIP_SIZE
             layer_hit = low <= next_layer_price if direction == "LONG" else high >= next_layer_price
@@ -329,34 +305,30 @@ def simulate_basket(
             sizes.append(layer_size(params.lot_multiplier, len(entries) - 1))
             max_total_size = max(max_total_size, sum(sizes))
 
-            adverse, favorable = floating_excursions(direction, high, low, entries, sizes)
-            max_adverse = max(max_adverse, adverse)
-            max_favorable = max(max_favorable, favorable)
-
-            if direction == "LONG":
-                failure_price = entries[-1] - params.max_basket_adverse_pips * PIP_SIZE
-                if low <= failure_price:
-                    exit_reason = "adverse_failure"
-                    exit_price = failure_price
-                    exit_idx = idx
-                    break
-            else:
-                failure_price = entries[-1] + params.max_basket_adverse_pips * PIP_SIZE
-                if high >= failure_price:
-                    exit_reason = "adverse_failure"
-                    exit_price = failure_price
-                    exit_idx = idx
-                    break
-        if exit_reason == "adverse_failure":
-            break
-
         avg_entry = weighted_average(entries, sizes)
+        adverse, favorable = floating_excursions(direction, high, low, entries, sizes)
+        max_adverse = max(max_adverse, adverse)
+        max_favorable = max(max_favorable, favorable)
+
         if direction == "LONG":
             tp_price = avg_entry + params.group_tp_pips * PIP_SIZE
+            failure_price = avg_entry - params.max_basket_adverse_pips * PIP_SIZE
             tp_hit = high >= tp_price
+            failure_hit = low <= failure_price
         else:
             tp_price = avg_entry - params.group_tp_pips * PIP_SIZE
+            failure_price = avg_entry + params.max_basket_adverse_pips * PIP_SIZE
             tp_hit = low <= tp_price
+            failure_hit = high >= failure_price
+
+        # Conservative same-bar handling: if the basket TP and adverse failure are
+        # both reachable in one candle after the current basket exposure is set,
+        # the adverse failure is booked first.
+        if failure_hit:
+            exit_reason = "adverse_failure"
+            exit_price = failure_price
+            exit_idx = idx
+            break
         if tp_hit:
             exit_reason = "group_tp"
             exit_price = tp_price
