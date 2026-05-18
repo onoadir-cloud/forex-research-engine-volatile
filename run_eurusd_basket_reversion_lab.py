@@ -300,15 +300,15 @@ def simulate_basket(
         max_adverse = max(max_adverse, adverse)
         max_favorable = max(max_favorable, favorable)
 
-        last_layer = entries[-1]
+        avg_entry = weighted_average(entries, sizes)
         if direction == "LONG":
-            failure_price = last_layer - params.max_basket_adverse_pips * PIP_SIZE
-            tp_price = weighted_average(entries, sizes) + params.group_tp_pips * PIP_SIZE
+            failure_price = avg_entry - params.max_basket_adverse_pips * PIP_SIZE
+            tp_price = avg_entry + params.group_tp_pips * PIP_SIZE
             failure_hit = low <= failure_price
             tp_hit = high >= tp_price
         else:
-            failure_price = last_layer + params.max_basket_adverse_pips * PIP_SIZE
-            tp_price = weighted_average(entries, sizes) - params.group_tp_pips * PIP_SIZE
+            failure_price = avg_entry + params.max_basket_adverse_pips * PIP_SIZE
+            tp_price = avg_entry - params.group_tp_pips * PIP_SIZE
             failure_hit = high >= failure_price
             tp_hit = low <= tp_price
 
@@ -333,15 +333,16 @@ def simulate_basket(
             max_adverse = max(max_adverse, adverse)
             max_favorable = max(max_favorable, favorable)
 
+            avg_entry = weighted_average(entries, sizes)
             if direction == "LONG":
-                failure_price = entries[-1] - params.max_basket_adverse_pips * PIP_SIZE
+                failure_price = avg_entry - params.max_basket_adverse_pips * PIP_SIZE
                 if low <= failure_price:
                     exit_reason = "adverse_failure"
                     exit_price = failure_price
                     exit_idx = idx
                     break
             else:
-                failure_price = entries[-1] + params.max_basket_adverse_pips * PIP_SIZE
+                failure_price = avg_entry + params.max_basket_adverse_pips * PIP_SIZE
                 if high >= failure_price:
                     exit_reason = "adverse_failure"
                     exit_price = failure_price
