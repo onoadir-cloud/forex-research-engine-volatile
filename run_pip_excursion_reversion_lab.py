@@ -54,6 +54,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--spread-pips", type=float, default=1.2)
     parser.add_argument("--slippage-pips", type=float, default=0.2)
     parser.add_argument("--output-dir", default="pip_excursion_reports")
+    parser.add_argument("--focused-only", action="store_true")
+    parser.add_argument("--focused-hour", type=int)
+    parser.add_argument("--focused-move-x-pips", type=int)
+    parser.add_argument("--focused-tp-pips", type=int)
+    parser.add_argument("--focused-emergency-sl-pips", type=int)
+    parser.add_argument("--focused-max-hold-bars", type=int)
+    parser.add_argument("--focused-direction", choices=["LONG", "SHORT"])
     return parser.parse_args()
 
 
@@ -273,13 +280,29 @@ def main() -> None:
 
     trades: List[TradeResult] = []
 
-    for anchor_type in ANCHORS:
+    focused_anchor_type = "daily_open"
+    focused_move_x_pips = args.focused_move_x_pips if args.focused_move_x_pips is not None else 30
+    focused_tp_pips = args.focused_tp_pips if args.focused_tp_pips is not None else 15
+    focused_emergency_sl_pips = args.focused_emergency_sl_pips if args.focused_emergency_sl_pips is not None else 300
+    focused_max_hold_bars = args.focused_max_hold_bars if args.focused_max_hold_bars is not None else 40
+    focused_hour = args.focused_hour if args.focused_hour is not None else 22
+    focused_direction = args.focused_direction if args.focused_direction is not None else "SHORT"
+
+    anchor_types = [focused_anchor_type] if args.focused_only else ANCHORS
+    move_x_values = [focused_move_x_pips] if args.focused_only else MOVE_X_PIPS
+    tp_values = [focused_tp_pips] if args.focused_only else TP_PIPS
+    emergency_sl_values = [focused_emergency_sl_pips] if args.focused_only else EMERGENCY_SL_PIPS
+    max_hold_values = [focused_max_hold_bars] if args.focused_only else MAX_HOLD_BARS
+
+    for anchor_type in anchor_types:
         anchor_values = df[anchor_type].values
-        for move_x in MOVE_X_PIPS:
-            for tp in TP_PIPS:
-                for emergency_sl in EMERGENCY_SL_PIPS:
-                    for max_hold in MAX_HOLD_BARS:
+        for move_x in move_x_values:
+            for tp in tp_values:
+                for emergency_sl in emergency_sl_values:
+                    for max_hold in max_hold_values:
                         for i in range(len(df) - 1):
+                            if args.focused_only and int(df.at[i, "hour"]) != focused_hour:
+                                continue
                             anchor_price = anchor_values[i]
                             if pd.isna(anchor_price):
                                 continue
@@ -291,6 +314,8 @@ def main() -> None:
                             elif close <= float(anchor_price) - move_x * PIP_SIZE_USDJPY:
                                 direction = "LONG"
                             if direction is None:
+                                continue
+                            if args.focused_only and direction != focused_direction:
                                 continue
 
                             outcome = simulate_trade(df, i, direction, tp, emergency_sl, max_hold, cost_pips)
