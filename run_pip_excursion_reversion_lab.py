@@ -61,6 +61,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--focused-emergency-sl-pips", type=int)
     parser.add_argument("--focused-max-hold-bars", type=int)
     parser.add_argument("--focused-direction", choices=["LONG", "SHORT"])
+    parser.add_argument("--entry-mode", choices=["continuous", "cross_only"], default="continuous")
+    parser.add_argument("--no-overlap", action="store_true")
+    parser.add_argument("--cooldown-until-anchor-reset", action="store_true")
     return parser.parse_args()
 
 
@@ -300,6 +303,8 @@ def main() -> None:
             for tp in tp_values:
                 for emergency_sl in emergency_sl_values:
                     for max_hold in max_hold_values:
+                        open_until_idx_by_direction: Dict[str, int] = {}
+                        cooldown_active_by_direction: Dict[str, bool] = {}
                         for i in range(len(df) - 1):
                             if args.focused_only and int(df.at[i, "hour"]) != focused_hour:
                                 continue
@@ -308,15 +313,44 @@ def main() -> None:
                                 continue
                             close = float(df.at[i, "close"])
                             distance_pips = (close - float(anchor_price)) / PIP_SIZE_USDJPY
+                            prev_distance_pips = None
+                            if i > 0:
+                                prev_anchor = anchor_values[i - 1]
+                                if not pd.isna(prev_anchor):
+                                    prev_close = float(df.at[i - 1, "close"])
+                                    prev_distance_pips = (prev_close - float(prev_anchor)) / PIP_SIZE_USDJPY
                             direction = None
-                            if close >= float(anchor_price) + move_x * PIP_SIZE_USDJPY:
-                                direction = "SHORT"
-                            elif close <= float(anchor_price) - move_x * PIP_SIZE_USDJPY:
-                                direction = "LONG"
+                            if args.entry_mode == "continuous":
+                                if close >= float(anchor_price) + move_x * PIP_SIZE_USDJPY:
+                                    direction = "SHORT"
+                                elif close <= float(anchor_price) - move_x * PIP_SIZE_USDJPY:
+                                    direction = "LONG"
+                            else:
+                                if prev_distance_pips is not None and prev_distance_pips < move_x <= distance_pips:
+                                    direction = "SHORT"
+                                elif prev_distance_pips is not None and prev_distance_pips > -move_x >= distance_pips:
+                                    direction = "LONG"
                             if direction is None:
                                 continue
                             if args.focused_only and direction != focused_direction:
                                 continue
+
+                            # strict validation controls (opt-in via flags only)
+                            if args.no_overlap or args.cooldown_until_anchor_reset:
+                                open_until_idx = open_until_idx_by_direction.get(direction, -1)
+                                if args.no_overlap and i <= open_until_idx:
+                                    continue
+                                if args.cooldown_until_anchor_reset and cooldown_active_by_direction.get(direction, False):
+                                    if direction == "SHORT":
+                                        if close <= float(anchor_price):
+                                            cooldown_active_by_direction[direction] = False
+                                        else:
+                                            continue
+                                    else:
+                                        if close >= float(anchor_price):
+                                            cooldown_active_by_direction[direction] = False
+                                        else:
+                                            continue
 
                             outcome = simulate_trade(df, i, direction, tp, emergency_sl, max_hold, cost_pips)
                             if outcome is None:
@@ -324,6 +358,11 @@ def main() -> None:
                             exit_reason, exit_dt, net_pips, holding_bars, max_adv, max_fav = outcome
                             gross_pips = net_pips + cost_pips
                             entry_i = i + 1
+                            exit_i = entry_i + holding_bars - 1
+                            if args.no_overlap:
+                                open_until_idx_by_direction[direction] = max(open_until_idx_by_direction.get(direction, -1), exit_i)
+                            if args.cooldown_until_anchor_reset:
+                                cooldown_active_by_direction[direction] = True
                             trades.append(
                                 TradeResult(
                                     symbol=args.symbol,
