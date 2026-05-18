@@ -305,9 +305,19 @@ def main() -> None:
                     for max_hold in max_hold_values:
                         open_until_idx_by_direction: Dict[str, int] = {}
                         cooldown_active_by_direction: Dict[str, bool] = {}
+                        prev_trading_date = None
                         for i in range(len(df) - 1):
                             if args.focused_only and int(df.at[i, "hour"]) != focused_hour:
                                 continue
+                            trading_date = df.at[i, "trading_date"]
+                            if (
+                                args.cooldown_until_anchor_reset
+                                and anchor_type == "daily_open"
+                                and prev_trading_date is not None
+                                and trading_date != prev_trading_date
+                            ):
+                                cooldown_active_by_direction.clear()
+                            prev_trading_date = trading_date
                             anchor_price = anchor_values[i]
                             if pd.isna(anchor_price):
                                 continue
