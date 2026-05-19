@@ -159,6 +159,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--slippage-pips", type=float, default=0.3)
     parser.add_argument("--output-dir", default="eurusd_basket_reports")
     parser.add_argument("--preset", choices=["full", "quick"], default="full")
+    parser.add_argument("--force-friday-close", action="store_true")
+    parser.add_argument("--friday-close-hour", type=int, default=21)
     return parser.parse_args()
 
 
@@ -294,6 +296,8 @@ def simulate_basket(
     params: BasketParams,
     symbol: str,
     cost_pips: float,
+    force_friday_close: bool = False,
+    friday_close_hour: int = 21,
 ) -> Optional[Tuple[BasketTrade, int]]:
     entry_idx = signal_idx + 1
     if entry_idx >= len(df):
@@ -354,6 +358,14 @@ def simulate_basket(
             exit_price = tp_price
             exit_idx = idx
             break
+
+        if force_friday_close:
+            bar_dt = row["datetime"]
+            if bar_dt.weekday() == 4 and int(bar_dt.hour) >= friday_close_hour:
+                exit_reason = "forced_friday_close"
+                exit_price = float(row["close"])
+                exit_idx = idx
+                break
 
         if idx == last_idx:
             exit_reason = "timeout"
@@ -417,7 +429,14 @@ def reset_reached(direction: str, close: float, anchor: float) -> bool:
     return close >= anchor
 
 
-def run_parameter_set(df: pd.DataFrame, params: BasketParams, symbol: str, cost_pips: float) -> List[BasketTrade]:
+def run_parameter_set(
+    df: pd.DataFrame,
+    params: BasketParams,
+    symbol: str,
+    cost_pips: float,
+    force_friday_close: bool = False,
+    friday_close_hour: int = 21,
+) -> List[BasketTrade]:
     trades: List[BasketTrade] = []
 
     # Symbol + anchor + direction groups are scanned independently. That enforces
@@ -440,7 +459,16 @@ def run_parameter_set(df: pd.DataFrame, params: BasketParams, symbol: str, cost_
                 i += 1
                 continue
 
-            result = simulate_basket(df, i, target_direction, params, symbol, cost_pips)
+            result = simulate_basket(
+                df,
+                i,
+                target_direction,
+                params,
+                symbol,
+                cost_pips,
+                force_friday_close=force_friday_close,
+                friday_close_hour=friday_close_hour,
+            )
             if result is None:
                 break
             trade, exit_idx = result
@@ -716,7 +744,16 @@ def main() -> None:
     for n, params in enumerate(params_list, start=1):
         if n == 1 or n % 1000 == 0:
             print(f"Simulating parameter set {n}/{len(params_list)}...")
-        all_trades.extend(run_parameter_set(df, params, args.symbol, cost_pips))
+        all_trades.extend(
+            run_parameter_set(
+                df,
+                params,
+                args.symbol,
+                cost_pips,
+                force_friday_close=args.force_friday_close,
+                friday_close_hour=args.friday_close_hour,
+            )
+        )
 
     trades_df = pd.DataFrame([asdict(t) for t in all_trades], columns=TRADE_COLUMNS)
     if not trades_df.empty:
