@@ -158,6 +158,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--spread-pips", type=float, default=1.0)
     parser.add_argument("--slippage-pips", type=float, default=0.3)
     parser.add_argument("--output-dir", default="eurusd_basket_reports")
+    parser.add_argument("--preset", choices=["full", "quick"], default="full")
     return parser.parse_args()
 
 
@@ -223,16 +224,35 @@ def load_data(csv_path: str, symbol: str, base_timeframe: str) -> pd.DataFrame:
     return df
 
 
-def iter_params() -> Iterable[BasketParams]:
+def iter_params(preset: str = "full") -> Iterable[BasketParams]:
+    if preset == "quick":
+        anchors = ["daily_open", "rolling_16_close"]
+        move_x_pips = [10, 15, 20]
+        layer_distance_pips = [10, 15]
+        max_layers = [2, 3]
+        lot_multipliers = [1.0, 1.2]
+        group_tp_pips = [5, 8, 10]
+        max_hold_bars = [40, 80]
+        max_basket_adverse_pips = [50, 75]
+    else:
+        anchors = ANCHORS
+        move_x_pips = MOVE_X_PIPS
+        layer_distance_pips = LAYER_DISTANCE_PIPS
+        max_layers = MAX_LAYERS
+        lot_multipliers = LOT_MULTIPLIERS
+        group_tp_pips = GROUP_TP_PIPS
+        max_hold_bars = MAX_HOLD_BARS
+        max_basket_adverse_pips = MAX_BASKET_ADVERSE_PIPS
+
     for values in product(
-        ANCHORS,
-        MOVE_X_PIPS,
-        LAYER_DISTANCE_PIPS,
-        MAX_LAYERS,
-        LOT_MULTIPLIERS,
-        GROUP_TP_PIPS,
-        MAX_HOLD_BARS,
-        MAX_BASKET_ADVERSE_PIPS,
+        anchors,
+        move_x_pips,
+        layer_distance_pips,
+        max_layers,
+        lot_multipliers,
+        group_tp_pips,
+        max_hold_bars,
+        max_basket_adverse_pips,
     ):
         yield BasketParams(*values)
 
@@ -690,7 +710,9 @@ def main() -> None:
 
     df = load_data(args.csv, args.symbol, args.base_timeframe)
     all_trades: List[BasketTrade] = []
-    params_list = list(iter_params())
+    params_list = list(iter_params(args.preset))
+    print(f"Selected preset: {args.preset}")
+    print(f"Total parameter sets: {len(params_list)}")
     for n, params in enumerate(params_list, start=1):
         if n == 1 or n % 1000 == 0:
             print(f"Simulating parameter set {n}/{len(params_list)}...")
