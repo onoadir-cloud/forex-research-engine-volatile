@@ -68,6 +68,29 @@ bool IsFridayAfterClose(const datetime when)
    return (dt.day_of_week == 5 && dt.hour >= InpFridayCloseHour);
 }
 
+bool IsMondayWeekendRecoveryNeeded()
+{
+   double weightedAvg = 0.0;
+   double totalVol = 0.0;
+   datetime earliestOpen = 0;
+   double lastEntryPrice = 0.0;
+   if(!GetBasketStats(weightedAvg, totalVol, earliestOpen, lastEntryPrice))
+      return false;
+
+   MqlDateTime nowDt;
+   TimeToStruct(TimeCurrent(), nowDt);
+   if(nowDt.day_of_week != 1)
+      return false;
+
+   MqlDateTime mondayStartDt = nowDt;
+   mondayStartDt.hour = 0;
+   mondayStartDt.min = 0;
+   mondayStartDt.sec = 0;
+   const datetime mondayStart = StructToTime(mondayStartDt);
+
+   return (earliestOpen > 0 && earliestOpen < mondayStart);
+}
+
 bool IsAllowedEntryHour(const datetime barTime)
 {
    MqlDateTime dt;
@@ -303,6 +326,7 @@ void OnTick()
    datetime firstOpen = 0;
    double lastEntryPrice = 0.0;
    const bool basketOpen = GetBasketStats(weightedAvg, totalVol, firstOpen, lastEntryPrice);
+   bool weekendRecoveryClosedThisTick = false;
 
    // Forced Friday close check (applies whenever basket is open).
    if(basketOpen && IsFridayAfterClose(TimeCurrent()))
@@ -310,6 +334,15 @@ void OnTick()
       if(InpPrintDebug)
          Print("Friday close condition met. Closing basket.");
       CloseAllBasketPositions("FORCED_FRIDAY_CLOSE");
+      return;
+   }
+
+   // Monday emergency weekend recovery close.
+   if(basketOpen && IsMondayWeekendRecoveryNeeded())
+   {
+      Print("FORCED_WEEKEND_RECOVERY_CLOSE: basket was carried over weekend; closing immediately.");
+      CloseAllBasketPositions("FORCED_WEEKEND_RECOVERY_CLOSE");
+      weekendRecoveryClosedThisTick = true;
       return;
    }
 
@@ -344,7 +377,7 @@ void OnTick()
       const int layers = CountBasketPositions();
       if(layers < InpMaxLayers)
       {
-         if(!IsFridayAfterClose(TimeCurrent()))
+         if(!IsFridayAfterClose(TimeCurrent()) && !weekendRecoveryClosedThisTick)
          {
             const double trigger = lastEntryPrice - InpLayerDistancePips * pip;
             if(tick.bid <= trigger)
@@ -367,7 +400,7 @@ void OnTick()
    if(InpTimeframe != PERIOD_M15)
       return;
 
-   if(IsFridayAfterClose(TimeCurrent()))
+   if(IsFridayAfterClose(TimeCurrent()) || weekendRecoveryClosedThisTick)
       return;
 
    if(Bars(InpSymbol, InpTimeframe) < 18)
