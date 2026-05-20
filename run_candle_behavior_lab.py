@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from itertools import product
 from pathlib import Path
 from typing import Dict, Iterable, List
@@ -26,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--preset", choices=["quick", "full"], default="quick")
     parser.add_argument("--write-events", action="store_true", default=False)
     parser.add_argument("--max-rows", type=int, default=0)
+    parser.add_argument("--max-scenarios", type=int, default=0)
     return parser.parse_args()
 
 
@@ -262,9 +264,11 @@ def main() -> None:
         "full": {"target": [5, 6, 7, 8, 9, 10, 12, 15], "adverse": [15, 20, 25, 30, 40, 50, 75], "hold": [10, 20, 40, 80]},
     }
     grid = grids[args.preset]
-    scenarios = len(grid["target"]) * len(grid["adverse"]) * len(grid["hold"]) * 2
+    total_scenarios = len(grid["target"]) * len(grid["adverse"]) * len(grid["hold"]) * 2
+    scenarios = total_scenarios if args.max_scenarios <= 0 else min(total_scenarios, args.max_scenarios)
     print(f"Preset={args.preset} | parameter scenarios={scenarios}")
 
+    start_ts = time.perf_counter()
     source_df = load_data(args.csv, args.symbol.upper())
     if args.max_rows > 0:
         source_df = source_df.head(args.max_rows).copy()
@@ -284,8 +288,11 @@ def main() -> None:
     scenario_idx = 0
     for target, adverse, hold in product(grid["target"], grid["adverse"], grid["hold"]):
         for direction in ["LONG", "SHORT"]:
+            if args.max_scenarios > 0 and scenario_idx >= scenarios:
+                break
             scenario_idx += 1
-            if scenario_idx == 1 or scenario_idx % 20 == 0 or scenario_idx == scenarios:
+            log_every = 5 if args.preset == "quick" else 20
+            if scenario_idx == 1 or scenario_idx % log_every == 0 or scenario_idx == scenarios:
                 print(f"Processing scenario {scenario_idx}/{scenarios}")
             for i in range(len(df) - 1):
                 ev = evaluate_signal(df, i, direction, target, adverse, hold, cost_pips)
@@ -311,6 +318,8 @@ def main() -> None:
                     "max_adverse_pips_seen": max_adv,
                 })
                 records.append(rec)
+        if args.max_scenarios > 0 and scenario_idx >= scenarios:
+            break
 
     events = pd.DataFrame.from_records(records)
     events = events[[
@@ -404,6 +413,7 @@ def main() -> None:
     print(f"Wrote: {results_path}")
     print(f"Wrote: {best_path}")
     print(f"Wrote: {summary_path}")
+    print(f"Total runtime seconds: {time.perf_counter() - start_ts:.2f}")
 
 
 if __name__ == "__main__":
