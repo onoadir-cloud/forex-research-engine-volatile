@@ -24,6 +24,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--slippage-pips", type=float, default=0.3)
     parser.add_argument("--output-dir", default="candle_behavior_reports")
     parser.add_argument("--preset", choices=["quick", "full"], default="quick")
+    parser.add_argument("--write-events", action="store_true", default=False)
+    parser.add_argument("--max-rows", type=int, default=0)
     return parser.parse_args()
 
 
@@ -263,7 +265,10 @@ def main() -> None:
     scenarios = len(grid["target"]) * len(grid["adverse"]) * len(grid["hold"]) * 2
     print(f"Preset={args.preset} | parameter scenarios={scenarios}")
 
-    df = build_features(load_data(args.csv, args.symbol.upper()))
+    source_df = load_data(args.csv, args.symbol.upper())
+    if args.max_rows > 0:
+        source_df = source_df.head(args.max_rows).copy()
+    df = build_features(source_df)
     cost_pips = args.spread_pips + args.slippage_pips
 
     base_cols = [
@@ -276,8 +281,12 @@ def main() -> None:
     ]
 
     records = []
+    scenario_idx = 0
     for target, adverse, hold in product(grid["target"], grid["adverse"], grid["hold"]):
         for direction in ["LONG", "SHORT"]:
+            scenario_idx += 1
+            if scenario_idx == 1 or scenario_idx % 20 == 0 or scenario_idx == scenarios:
+                print(f"Processing scenario {scenario_idx}/{scenarios}")
             for i in range(len(df) - 1):
                 ev = evaluate_signal(df, i, direction, target, adverse, hold, cost_pips)
                 if ev is None:
@@ -333,14 +342,18 @@ def main() -> None:
         & (results["wf_positive_windows"] >= 2)
     ].copy()
 
-    out_dir = Path(args.output_dir)
+    output_dir = args.output_dir
+    if args.preset == "quick" and args.output_dir == "candle_behavior_reports":
+        output_dir = "candle_behavior_reports_quick"
+    out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     events_path = out_dir / f"{args.symbol.upper()}_candle_behavior_events.csv"
     results_path = out_dir / f"{args.symbol.upper()}_candle_behavior_results.csv"
     best_path = out_dir / f"{args.symbol.upper()}_candle_behavior_best.json"
     summary_path = out_dir / f"{args.symbol.upper()}_candle_behavior_summary.md"
 
-    events.to_csv(events_path, index=False)
+    if args.write_events:
+        events.to_csv(events_path, index=False)
     results.to_csv(results_path, index=False)
 
     top_oos = clean.sort_values("OOS_avg_net", ascending=False).head(30)
@@ -384,7 +397,10 @@ def main() -> None:
         lines.append("## Warning\n\nNo clean candidates were found under current criteria.\n")
 
     summary_path.write_text("\n".join(lines), encoding="utf-8")
-    print(f"Wrote: {events_path}")
+    if args.write_events:
+        print(f"Wrote: {events_path}")
+    else:
+        print(f"Skipped events CSV (use --write-events to enable): {events_path}")
     print(f"Wrote: {results_path}")
     print(f"Wrote: {best_path}")
     print(f"Wrote: {summary_path}")
