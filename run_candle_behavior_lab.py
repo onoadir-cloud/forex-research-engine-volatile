@@ -8,7 +8,8 @@ import json
 import time
 from itertools import product
 from pathlib import Path
-from typing import Dict, Iterable, List
+from collections import defaultdict
+from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -148,11 +149,12 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def evaluate_signal(df: pd.DataFrame, signal_idx: int, direction: str, target_pips: int, adverse_pips: int, max_hold_bars: int, cost_pips: float):
+def evaluate_signal_arrays(open_arr: np.ndarray, high_arr: np.ndarray, low_arr: np.ndarray, close_arr: np.ndarray, signal_idx: int, direction: str, target_pips: int, adverse_pips: int, max_hold_bars: int):
     entry_idx = signal_idx + 1
-    if entry_idx >= len(df):
+    n = len(open_arr)
+    if entry_idx >= n:
         return None
-    entry = float(df.at[entry_idx, "open"])
+    entry = float(open_arr[entry_idx])
     pip = PIP_SIZE_EURUSD
     if direction == "LONG":
         target_px = entry + target_pips * pip
@@ -161,13 +163,12 @@ def evaluate_signal(df: pd.DataFrame, signal_idx: int, direction: str, target_pi
         target_px = entry - target_pips * pip
         adverse_px = entry + adverse_pips * pip
 
-    last_idx = min(len(df) - 1, entry_idx + max_hold_bars - 1)
+    last_idx = min(n - 1, entry_idx + max_hold_bars - 1)
     max_fav = 0.0
     max_adv = 0.0
     for i in range(entry_idx, last_idx + 1):
-        row = df.iloc[i]
-        hi = float(row["high"])
-        lo = float(row["low"])
+        hi = float(high_arr[i])
+        lo = float(low_arr[i])
         if direction == "LONG":
             fav = max(0.0, (hi - entry) / pip)
             adv = max(0.0, (entry - lo) / pip)
@@ -188,69 +189,77 @@ def evaluate_signal(df: pd.DataFrame, signal_idx: int, direction: str, target_pi
         if hit_target:
             return "hit", i - entry_idx + 1, float(target_pips), max_fav, max_adv
 
-    close_px = float(df.at[last_idx, "close"])
+    close_px = float(close_arr[last_idx])
     gross = (close_px - entry) / pip if direction == "LONG" else (entry - close_px) / pip
     return "timeout", last_idx - entry_idx + 1, float(gross), max_fav, max_adv
 
 
-def aggregate(df: pd.DataFrame, group_cols: List[str]) -> pd.DataFrame:
+def aggregate_from_buffers(group_buffers: Dict[Tuple, List[Tuple]], group_cols: List[str]) -> pd.DataFrame:
     rows = []
-    split_idx = int(len(df) * 0.7)
-    df = df.sort_values("signal_datetime").reset_index(drop=True)
-    df["is_oos"] = np.arange(len(df)) >= split_idx
-    wf_bins = pd.qcut(np.arange(len(df)), q=3, labels=False, duplicates="drop")
-    df["wf_window"] = wf_bins
-
-    for keys, g in df.groupby(group_cols, dropna=False):
+    for keys, evs in group_buffers.items():
         if not isinstance(keys, tuple):
             keys = (keys,)
         d = dict(zip(group_cols, keys))
-        n = len(g)
-        hits = (g["outcome"] == "hit")
-        adverse = (g["outcome"] == "adverse")
-        timeout = (g["outcome"] == "timeout")
-        net = g["net_pips_after_costs"]
+        evs_sorted = sorted(evs, key=lambda x: x[0])
+        n = len(evs_sorted)
+        split_idx = int(n * 0.7)
+        wf_bins = pd.qcut(np.arange(n), q=3, labels=False, duplicates="drop") if n else np.array([])
+
+        outcomes = np.array([e[1] for e in evs_sorted], dtype=object)
+        bars = np.array([e[2] for e in evs_sorted], dtype=float)
+        net = np.array([e[3] for e in evs_sorted], dtype=float)
+        max_adv = np.array([e[4] for e in evs_sorted], dtype=float)
+        hits = outcomes == "hit"
+        adverse = outcomes == "adverse"
+        timeout = outcomes == "timeout"
+
         gp = net[net > 0].sum()
         gl = -net[net < 0].sum()
         pf = float(gp / gl) if gl > 0 else (float("inf") if gp > 0 else 0.0)
 
-        isg = g[~g["is_oos"]]
-        oosg = g[g["is_oos"]]
+        is_mask = np.arange(n) < split_idx
+        oos_mask = ~is_mask
+        is_net = net[is_mask]
+        oos_net = net[oos_mask]
+        is_out = outcomes[is_mask]
+        oos_out = outcomes[oos_mask]
+
         wf_positive = 0
         wf_total = 0
-        for _, w in g.groupby("wf_window"):
-            if len(w) == 0:
-                continue
-            wf_total += 1
-            if w["net_pips_after_costs"].mean() > 0:
-                wf_positive += 1
+        if n:
+            wf_arr = np.array(wf_bins, dtype=float)
+            for w in np.unique(wf_arr[~pd.isna(wf_arr)]):
+                m = wf_arr == w
+                if m.any():
+                    wf_total += 1
+                    if net[m].mean() > 0:
+                        wf_positive += 1
 
         d.update({
             "events": n,
             "hit_rate": hits.mean() if n else 0.0,
             "adverse_failure_rate": adverse.mean() if n else 0.0,
             "timeout_rate": timeout.mean() if n else 0.0,
-            "avg_bars_to_hit": g.loc[hits, "bars_to_outcome"].mean() if hits.any() else np.nan,
-            "median_bars_to_hit": g.loc[hits, "bars_to_outcome"].median() if hits.any() else np.nan,
+            "avg_bars_to_hit": bars[hits].mean() if hits.any() else np.nan,
+            "median_bars_to_hit": np.median(bars[hits]) if hits.any() else np.nan,
             "avg_net_pips_after_costs": net.mean() if n else 0.0,
             "total_net_pips_after_costs": net.sum(),
             "profit_factor": pf,
-            "avg_max_adverse_pips_seen": g["max_adverse_pips_seen"].mean() if n else 0.0,
-            "p95_max_adverse_pips_seen": g["max_adverse_pips_seen"].quantile(0.95) if n else 0.0,
-            "max_adverse_pips_seen": g["max_adverse_pips_seen"].max() if n else 0.0,
-            "IS_events": len(isg),
-            "OOS_events": len(oosg),
-            "IS_hit_rate": (isg["outcome"] == "hit").mean() if len(isg) else np.nan,
-            "OOS_hit_rate": (oosg["outcome"] == "hit").mean() if len(oosg) else np.nan,
-            "IS_avg_net": isg["net_pips_after_costs"].mean() if len(isg) else np.nan,
-            "OOS_avg_net": oosg["net_pips_after_costs"].mean() if len(oosg) else np.nan,
-            "OOS_agrees_with_IS": bool((isg["net_pips_after_costs"].mean() > 0) and (oosg["net_pips_after_costs"].mean() > 0)) if len(isg) and len(oosg) else False,
+            "avg_max_adverse_pips_seen": max_adv.mean() if n else 0.0,
+            "p95_max_adverse_pips_seen": np.quantile(max_adv, 0.95) if n else 0.0,
+            "max_adverse_pips_seen": max_adv.max() if n else 0.0,
+            "IS_events": int(is_mask.sum()),
+            "OOS_events": int(oos_mask.sum()),
+            "IS_hit_rate": (is_out == "hit").mean() if is_out.size else np.nan,
+            "OOS_hit_rate": (oos_out == "hit").mean() if oos_out.size else np.nan,
+            "IS_avg_net": is_net.mean() if is_net.size else np.nan,
+            "OOS_avg_net": oos_net.mean() if oos_net.size else np.nan,
+            "OOS_agrees_with_IS": bool((is_net.mean() > 0) and (oos_net.mean() > 0)) if is_net.size and oos_net.size else False,
             "wf_positive_windows": wf_positive,
             "wf_total_windows": wf_total,
         })
         rows.append(d)
     return pd.DataFrame(rows)
-
 
 def main() -> None:
     args = parse_args()
@@ -266,14 +275,13 @@ def main() -> None:
     grid = grids[args.preset]
     total_scenarios = len(grid["target"]) * len(grid["adverse"]) * len(grid["hold"]) * 2
     scenarios = total_scenarios if args.max_scenarios <= 0 else min(total_scenarios, args.max_scenarios)
-    print(f"Preset={args.preset} | parameter scenarios={scenarios}")
-
     start_ts = time.perf_counter()
     source_df = load_data(args.csv, args.symbol.upper())
     if args.max_rows > 0:
         source_df = source_df.head(args.max_rows).copy()
     df = build_features(source_df)
     cost_pips = args.spread_pips + args.slippage_pips
+    print(f"Preset={args.preset} | rows_used={len(df)} | scenarios_used={scenarios} | write_events={args.write_events}")
 
     base_cols = [
         "symbol", "datetime", "hour", "day_of_week", "session_bucket", "open", "high", "low", "close",
@@ -283,8 +291,22 @@ def main() -> None:
         "previous_3_direction", "distance_from_rolling_16_pips", "distance_from_rolling_32_pips", "distance_from_daily_open_pips",
         "distance_from_rolling_16_abs_bucket", "distance_from_daily_open_abs_bucket",
     ]
+    group_sets = [
+        ["candle_direction", "body_size_bucket", "target_pips", "adverse_pips", "max_hold_bars", "direction_test"],
+        ["wick_signal_bucket", "close_position_bucket", "target_pips", "adverse_pips", "max_hold_bars", "direction_test"],
+        ["streak_bucket", "previous_3_direction", "target_pips", "adverse_pips", "max_hold_bars", "direction_test"],
+        ["session_bucket", "hour", "wick_signal_bucket", "target_pips", "adverse_pips", "max_hold_bars", "direction_test"],
+        ["distance_from_rolling_16_abs_bucket", "candle_direction", "target_pips", "adverse_pips", "max_hold_bars", "direction_test"],
+        ["distance_from_daily_open_abs_bucket", "candle_direction", "target_pips", "adverse_pips", "max_hold_bars", "direction_test"],
+    ]
 
-    records = []
+    open_arr = df["open"].to_numpy(dtype=float)
+    high_arr = df["high"].to_numpy(dtype=float)
+    low_arr = df["low"].to_numpy(dtype=float)
+    close_arr = df["close"].to_numpy(dtype=float)
+
+    records = [] if args.write_events else None
+    group_buffers = [defaultdict(list) for _ in group_sets]
     scenario_idx = 0
     for target, adverse, hold in product(grid["target"], grid["adverse"], grid["hold"]):
         for direction in ["LONG", "SHORT"]:
@@ -295,14 +317,16 @@ def main() -> None:
             if scenario_idx == 1 or scenario_idx % log_every == 0 or scenario_idx == scenarios:
                 print(f"Processing scenario {scenario_idx}/{scenarios}")
             for i in range(len(df) - 1):
-                ev = evaluate_signal(df, i, direction, target, adverse, hold, cost_pips)
+                ev = evaluate_signal_arrays(open_arr, high_arr, low_arr, close_arr, i, direction, target, adverse, hold)
                 if ev is None:
                     continue
                 outcome, bars_to_outcome, gross, max_fav, max_adv = ev
                 row = df.iloc[i]
                 entry_dt = df.iloc[i + 1]["datetime"]
-                rec = {k: row[k] for k in base_cols}
-                rec.update({
+                net = gross - cost_pips
+                if args.write_events:
+                    rec = {k: row[k] for k in base_cols}
+                    rec.update({
                     "signal_datetime": row["datetime"],
                     "entry_datetime": entry_dt,
                     "direction_test": direction,
@@ -313,35 +337,44 @@ def main() -> None:
                     "bars_to_outcome": bars_to_outcome,
                     "gross_pips_if_traded": gross,
                     "cost_pips": cost_pips,
-                    "net_pips_after_costs": gross - cost_pips,
+                    "net_pips_after_costs": net,
                     "max_favorable_pips": max_fav,
                     "max_adverse_pips_seen": max_adv,
-                })
-                records.append(rec)
+                    })
+                    records.append(rec)
+                for gi, cols in enumerate(group_sets):
+                    key_vals = []
+                    for c in cols:
+                        if c == "target_pips":
+                            key_vals.append(target)
+                        elif c == "adverse_pips":
+                            key_vals.append(adverse)
+                        elif c == "max_hold_bars":
+                            key_vals.append(hold)
+                        elif c == "direction_test":
+                            key_vals.append(direction)
+                        else:
+                            key_vals.append(row[c])
+                    group_buffers[gi][tuple(key_vals)].append((row["datetime"], outcome, bars_to_outcome, net, max_adv))
         if args.max_scenarios > 0 and scenario_idx >= scenarios:
             break
 
-    events = pd.DataFrame.from_records(records)
-    events = events[[
-        "symbol", "signal_datetime", "entry_datetime", "hour", "day_of_week", "session_bucket", "direction_test", "target_pips",
-        "adverse_pips", "max_hold_bars", "open", "high", "low", "close", "body_pips", "range_pips", "upper_wick_pips",
-        "lower_wick_pips", "body_to_range", "upper_wick_to_range", "lower_wick_to_range", "close_position", "candle_direction",
-        "body_size_bucket", "range_size_bucket", "close_position_bucket", "wick_signal_bucket", "consecutive_bull_count",
-        "consecutive_bear_count", "streak_bucket", "previous_3_direction", "distance_from_rolling_16_pips",
-        "distance_from_rolling_32_pips", "distance_from_daily_open_pips", "distance_from_rolling_16_abs_bucket",
-        "distance_from_daily_open_abs_bucket", "outcome", "bars_to_outcome", "gross_pips_if_traded", "cost_pips",
-        "net_pips_after_costs", "max_favorable_pips", "max_adverse_pips_seen",
-    ]]
+    if args.write_events:
+        events = pd.DataFrame.from_records(records)
+        events = events[[
+            "symbol", "signal_datetime", "entry_datetime", "hour", "day_of_week", "session_bucket", "direction_test", "target_pips",
+            "adverse_pips", "max_hold_bars", "open", "high", "low", "close", "body_pips", "range_pips", "upper_wick_pips",
+            "lower_wick_pips", "body_to_range", "upper_wick_to_range", "lower_wick_to_range", "close_position", "candle_direction",
+            "body_size_bucket", "range_size_bucket", "close_position_bucket", "wick_signal_bucket", "consecutive_bull_count",
+            "consecutive_bear_count", "streak_bucket", "previous_3_direction", "distance_from_rolling_16_pips",
+            "distance_from_rolling_32_pips", "distance_from_daily_open_pips", "distance_from_rolling_16_abs_bucket",
+            "distance_from_daily_open_abs_bucket", "outcome", "bars_to_outcome", "gross_pips_if_traded", "cost_pips",
+            "net_pips_after_costs", "max_favorable_pips", "max_adverse_pips_seen",
+        ]]
+    else:
+        events = None
 
-    group_sets = [
-        ["candle_direction", "body_size_bucket", "target_pips", "adverse_pips", "max_hold_bars", "direction_test"],
-        ["wick_signal_bucket", "close_position_bucket", "target_pips", "adverse_pips", "max_hold_bars", "direction_test"],
-        ["streak_bucket", "previous_3_direction", "target_pips", "adverse_pips", "max_hold_bars", "direction_test"],
-        ["session_bucket", "hour", "wick_signal_bucket", "target_pips", "adverse_pips", "max_hold_bars", "direction_test"],
-        ["distance_from_rolling_16_abs_bucket", "candle_direction", "target_pips", "adverse_pips", "max_hold_bars", "direction_test"],
-        ["distance_from_daily_open_abs_bucket", "candle_direction", "target_pips", "adverse_pips", "max_hold_bars", "direction_test"],
-    ]
-    results = pd.concat([aggregate(events, cols).assign(table_id=i + 1) for i, cols in enumerate(group_sets)], ignore_index=True)
+    results = pd.concat([aggregate_from_buffers(group_buffers[i], cols).assign(table_id=i + 1) for i, cols in enumerate(group_sets)], ignore_index=True)
 
     clean = results[
         (results["events"] >= 200)
