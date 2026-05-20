@@ -19,6 +19,29 @@ CORRECTION_PIPS = [5, 6, 7, 8, 9, 10]
 ADVERSE_PIPS = [10, 15, 20, 25, 30, 40, 50]
 MAX_HOLD_BARS = [10, 20, 40, 80]
 
+PRESET_CONFIG = {
+    "full": {
+        "anchors": ANCHORS,
+        "directions": DIRECTIONS,
+        "move_x_pips": MOVE_X_PIPS,
+        "correction_pips": CORRECTION_PIPS,
+        "adverse_pips": ADVERSE_PIPS,
+        "max_hold_bars": MAX_HOLD_BARS,
+        "focus_hours": None,
+        "focus_sessions": None,
+    },
+    "quick": {
+        "anchors": ["rolling_16_close"],
+        "directions": ["LONG"],
+        "move_x_pips": [5, 10, 15],
+        "correction_pips": [5, 6, 7, 8, 9, 10],
+        "adverse_pips": [30, 40, 50],
+        "max_hold_bars": [20, 40, 80],
+        "focus_hours": [16, 17, 18],
+        "focus_sessions": ["16-18 New York mid"],
+    },
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="EURUSD M15 pip reversion probability lab")
@@ -28,6 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--spread-pips", type=float, default=1.0)
     parser.add_argument("--slippage-pips", type=float, default=0.3)
     parser.add_argument("--output-dir", default="pip_reversion_probability_reports")
+    parser.add_argument("--preset", choices=["full", "quick"], default="full")
     return parser.parse_args()
 
 
@@ -80,12 +104,13 @@ def load_data(csv_path: str, symbol: str, timeframe: str) -> pd.DataFrame:
 
 
 def simulate_events(df: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
+    preset = PRESET_CONFIG[args.preset]
     records: List[Dict] = []
     cost_pips = args.spread_pips + args.slippage_pips
 
-    for anchor_type in ANCHORS:
-        for direction in DIRECTIONS:
-            for move_x in MOVE_X_PIPS:
+    for anchor_type in preset["anchors"]:
+        for direction in preset["directions"]:
+            for move_x in preset["move_x_pips"]:
                 move_px = move_x * PIP_SIZE
                 for i in range(len(df) - 1):
                     anchor = df.at[i, anchor_type]
@@ -104,9 +129,9 @@ def simulate_events(df: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
                     entry_price = df.at[entry_idx, "open"]
                     entry_dt = df.at[entry_idx, "datetime"]
 
-                    for correction_pips in CORRECTION_PIPS:
-                        for adverse_pips in ADVERSE_PIPS:
-                            for max_hold in MAX_HOLD_BARS:
+                    for correction_pips in preset["correction_pips"]:
+                        for adverse_pips in preset["adverse_pips"]:
+                            for max_hold in preset["max_hold_bars"]:
                                 target_px = correction_pips * PIP_SIZE
                                 adverse_px = adverse_pips * PIP_SIZE
                                 target = entry_price + target_px if direction == "LONG" else entry_price - target_px
@@ -290,6 +315,21 @@ def write_summary(results: pd.DataFrame, out_path: Path) -> None:
     out_path.write_text("\n".join(md), encoding="utf-8")
 
 
+def filter_events_for_results(events: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
+    preset = PRESET_CONFIG[args.preset]
+    focus_hours = preset["focus_hours"]
+    focus_sessions = preset["focus_sessions"]
+    if focus_hours is None and focus_sessions is None:
+        return events
+
+    mask = pd.Series(False, index=events.index)
+    if focus_hours is not None:
+        mask |= events["hour"].isin(focus_hours)
+    if focus_sessions is not None:
+        mask |= events["session_bucket"].isin(focus_sessions)
+    return events.loc[mask].copy()
+
+
 def main() -> None:
     args = parse_args()
     data = load_data(args.csv, args.symbol, args.base_timeframe)
@@ -309,9 +349,15 @@ def main() -> None:
         summary_path.write_text("# EURUSD Pip Reversion Probability Lab Summary\n\nNo events generated.", encoding="utf-8")
         return
 
-    results = aggregate(events)
+    events_for_results = filter_events_for_results(events, args)
+    results = aggregate(events_for_results) if not events_for_results.empty else pd.DataFrame()
     events.to_csv(events_path, index=False)
     results.to_csv(results_path, index=False)
+
+    if results.empty:
+        best_path.write_text(json.dumps({"warning": "No events generated for selected preset focus."}, indent=2), encoding="utf-8")
+        summary_path.write_text("# EURUSD Pip Reversion Probability Lab Summary\n\nNo events generated for selected preset focus.", encoding="utf-8")
+        return
 
     best_eligible = results[results["events"] >= 200].copy()
     best = best_eligible.head(30) if not best_eligible.empty else results.head(30)
