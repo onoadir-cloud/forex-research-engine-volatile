@@ -182,6 +182,7 @@ def aggregate_group(df, keys, horizon):
         down = gdf[f"future_max_down_pips_{horizon}"]
         r = {
             **gdict,
+            "horizon_bars": horizon,
             "observations": len(gdf),
             "mean_future_max_up_pips": up.mean(), "median_future_max_up_pips": up.median(),
             "p75_future_max_up_pips": up.quantile(0.75), "p90_future_max_up_pips": up.quantile(0.90), "p95_future_max_up_pips": up.quantile(0.95),
@@ -234,13 +235,13 @@ def main():
         ["hour", "compression_bucket"], ["wick_structure_bucket", "close_position_bucket"], ["session_bucket", "distance_from_rolling_16_abs_bucket"],
     ]
 
-    h_main = 20 if 20 in horizons else horizons[-1]
     grouped = []
     for g in grouping_specs:
-        print(f"Aggregating group: {g}")
-        tmp = aggregate_group(df, g, h_main)
-        tmp["grouping"] = "+".join(g)
-        grouped.append(tmp)
+        for h in horizons:
+            print(f"Aggregating group: {g} @ horizon {h}")
+            tmp = aggregate_group(df, g, h)
+            tmp["grouping"] = "+".join(g)
+            grouped.append(tmp)
     grouped_df = pd.concat(grouped, ignore_index=True, sort=False)
 
     out = Path(args.output_dir)
@@ -251,6 +252,14 @@ def main():
         "rows": len(df), "start_datetime": df["datetime"].min(), "end_datetime": df["datetime"].max(),
         "horizons": ",".join(map(str, horizons)), "thresholds": ",".join(map(str, thresholds)),
     }])
+
+    assert "horizon_bars" in grouped_df.columns, "Grouped output must include horizon_bars."
+    if args.preset == "quick":
+        expected_quick_horizons = {5, 10, 20, 40}
+        present_horizons = set(pd.to_numeric(grouped_df["horizon_bars"], errors="coerce").dropna().astype(int).unique())
+        missing_quick_horizons = expected_quick_horizons - present_horizons
+        assert not missing_quick_horizons, f"Grouped output missing quick horizons: {sorted(missing_quick_horizons)}"
+
     overview.to_csv(out / "EURUSD_atlas_overview.csv", index=False)
     grouped_df.to_csv(out / "EURUSD_atlas_grouped_behavior.csv", index=False)
 
@@ -268,6 +277,7 @@ def main():
     md = [
         "# EURUSD M15 Market Behavior Atlas Summary",
         f"- Dataset range: {df['datetime'].min()} to {df['datetime'].max()} ({len(df)} rows)",
+        f"- Horizons included in grouped output: {', '.join(map(str, horizons))} bars.",
         "- This report is descriptive market behavior analysis based on future movement distributions, not a strategy test.",
         "## Top behavior groups by strong future up movement tendency",
         top_up[["grouping", "mean_future_max_up_pips", "observations"]].to_markdown(index=False),
