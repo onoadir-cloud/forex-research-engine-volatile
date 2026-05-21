@@ -26,6 +26,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--slippage-pips", type=float, default=0.3)
     parser.add_argument("--output-dir", default="candle_behavior_reports")
     parser.add_argument("--preset", choices=["superquick", "quick", "full"], default="quick")
+    parser.add_argument("--focused-only", action="store_true", default=False)
+    parser.add_argument("--focused-direction-test", choices=["LONG", "SHORT"], default="LONG")
+    parser.add_argument("--focused-target-pips", type=float, default=10)
+    parser.add_argument("--focused-adverse-pips", type=float, default=50)
+    parser.add_argument("--focused-max-hold-bars", type=int, default=80)
+    parser.add_argument("--focused-session-bucket", type=str, default="Asia early")
+    parser.add_argument("--focused-hour", type=int, default=0)
+    parser.add_argument("--focused-wick-signal-bucket", type=str, default="indecision")
     parser.add_argument("--write-events", action="store_true", default=False)
     parser.add_argument("--max-rows", type=int, default=0)
     parser.add_argument("--max-scenarios", type=int, default=0)
@@ -356,15 +364,45 @@ def main() -> None:
         "full": {"target": [5, 6, 7, 8, 9, 10, 12, 15], "adverse": [15, 20, 25, 30, 40, 50, 75], "hold": [10, 20, 40, 80]},
     }
     grid = grids[args.preset]
-    total_scenarios = len(grid["target"]) * len(grid["adverse"]) * len(grid["hold"]) * 2
-    scenarios = total_scenarios if args.max_scenarios <= 0 else min(total_scenarios, args.max_scenarios)
+    if args.focused_only:
+        scenario_specs = [(
+            int(args.focused_target_pips),
+            int(args.focused_adverse_pips),
+            int(args.focused_max_hold_bars),
+            args.focused_direction_test,
+        )]
+        scenarios = 1
+    else:
+        total_scenarios = len(grid["target"]) * len(grid["adverse"]) * len(grid["hold"]) * 2
+        scenarios = total_scenarios if args.max_scenarios <= 0 else min(total_scenarios, args.max_scenarios)
     start_ts = time.perf_counter()
     source_df = load_data(args.csv, args.symbol.upper())
     if args.max_rows > 0:
         source_df = source_df.head(args.max_rows).copy()
     df = build_features(source_df)
+    if args.focused_only:
+        df = df[
+            (df["session_bucket"] == args.focused_session_bucket)
+            & (df["hour"] == args.focused_hour)
+            & (df["wick_signal_bucket"] == args.focused_wick_signal_bucket)
+        ].copy()
     cost_pips = args.spread_pips + args.slippage_pips
-    print(f"Preset={args.preset} | rows_used={len(df)} | scenarios_used={scenarios} | write_events={args.write_events}")
+    if args.focused_only:
+        print(
+            "Focused mode ON"
+            f" | rows_used={len(df)}"
+            f" | scenarios_used={scenarios}"
+            f" | direction={args.focused_direction_test}"
+            f" | target={args.focused_target_pips}"
+            f" | adverse={args.focused_adverse_pips}"
+            f" | hold={args.focused_max_hold_bars}"
+            f" | session={args.focused_session_bucket}"
+            f" | hour={args.focused_hour}"
+            f" | wick={args.focused_wick_signal_bucket}"
+            f" | write_events={args.write_events}"
+        )
+    else:
+        print(f"Preset={args.preset} | rows_used={len(df)} | scenarios_used={scenarios} | write_events={args.write_events}")
 
     base_cols = [
         "symbol", "datetime", "hour", "day_of_week", "session_bucket", "open", "high", "low", "close",
@@ -391,34 +429,41 @@ def main() -> None:
     records = [] if args.write_events else None
     group_buffers = [defaultdict(list) for _ in group_sets]
     scenario_idx = 0
-    for target, adverse, hold in product(grid["target"], grid["adverse"], grid["hold"]):
-        for direction in ["LONG", "SHORT"]:
-            if args.max_scenarios > 0 and scenario_idx >= scenarios:
-                break
-            scenario_idx += 1
-            if scenario_idx == 1 or scenario_idx % 5 == 0 or scenario_idx == scenarios:
-                print(f"Processing scenario {scenario_idx}/{scenarios} | elapsed={time.perf_counter() - start_ts:.2f}s")
-            ev = evaluate_scenario_vectorized(open_arr, high_arr, low_arr, close_arr, direction, target, adverse, hold)
-            if ev is None:
-                continue
-            outcomes = ev["outcome"]
-            bars_to_outcomes = ev["bars_to_outcome"]
-            gross_arr = ev["gross"]
-            max_fav_arr = ev["max_fav"]
-            max_adv_arr = ev["max_adv"]
-            net_arr = gross_arr - cost_pips
+    if args.focused_only:
+        scenario_iter = scenario_specs
+    else:
+        scenario_iter = (
+            (target, adverse, hold, direction)
+            for target, adverse, hold in product(grid["target"], grid["adverse"], grid["hold"])
+            for direction in ["LONG", "SHORT"]
+        )
+    for target, adverse, hold, direction in scenario_iter:
+        if not args.focused_only and args.max_scenarios > 0 and scenario_idx >= scenarios:
+            break
+        scenario_idx += 1
+        if scenario_idx == 1 or scenario_idx % 5 == 0 or scenario_idx == scenarios:
+            print(f"Processing scenario {scenario_idx}/{scenarios} | elapsed={time.perf_counter() - start_ts:.2f}s")
+        ev = evaluate_scenario_vectorized(open_arr, high_arr, low_arr, close_arr, direction, target, adverse, hold)
+        if ev is None:
+            continue
+        outcomes = ev["outcome"]
+        bars_to_outcomes = ev["bars_to_outcome"]
+        gross_arr = ev["gross"]
+        max_fav_arr = ev["max_fav"]
+        max_adv_arr = ev["max_adv"]
+        net_arr = gross_arr - cost_pips
 
-            for i in range(len(df) - 1):
-                row = df.iloc[i]
-                outcome = outcomes[i]
-                bars_to_outcome = int(bars_to_outcomes[i])
-                gross = float(gross_arr[i])
-                max_fav = float(max_fav_arr[i])
-                max_adv = float(max_adv_arr[i])
-                net = float(net_arr[i])
-                if args.write_events:
-                    rec = {k: row[k] for k in base_cols}
-                    rec.update({
+        for i in range(len(df) - 1):
+            row = df.iloc[i]
+            outcome = outcomes[i]
+            bars_to_outcome = int(bars_to_outcomes[i])
+            gross = float(gross_arr[i])
+            max_fav = float(max_fav_arr[i])
+            max_adv = float(max_adv_arr[i])
+            net = float(net_arr[i])
+            if args.write_events:
+                rec = {k: row[k] for k in base_cols}
+                rec.update({
                     "signal_datetime": row["datetime"],
                     "entry_datetime": df.iloc[i + 1]["datetime"],
                     "direction_test": direction,
@@ -432,24 +477,22 @@ def main() -> None:
                     "net_pips_after_costs": net,
                     "max_favorable_pips": max_fav,
                     "max_adverse_pips_seen": max_adv,
-                    })
-                    records.append(rec)
-                for gi, cols in enumerate(group_sets):
-                    key_vals = []
-                    for c in cols:
-                        if c == "target_pips":
-                            key_vals.append(target)
-                        elif c == "adverse_pips":
-                            key_vals.append(adverse)
-                        elif c == "max_hold_bars":
-                            key_vals.append(hold)
-                        elif c == "direction_test":
-                            key_vals.append(direction)
-                        else:
-                            key_vals.append(row[c])
-                    group_buffers[gi][tuple(key_vals)].append((row["datetime"], outcome, bars_to_outcome, net, max_adv))
-        if args.max_scenarios > 0 and scenario_idx >= scenarios:
-            break
+                })
+                records.append(rec)
+            for gi, cols in enumerate(group_sets):
+                key_vals = []
+                for c in cols:
+                    if c == "target_pips":
+                        key_vals.append(target)
+                    elif c == "adverse_pips":
+                        key_vals.append(adverse)
+                    elif c == "max_hold_bars":
+                        key_vals.append(hold)
+                    elif c == "direction_test":
+                        key_vals.append(direction)
+                    else:
+                        key_vals.append(row[c])
+                group_buffers[gi][tuple(key_vals)].append((row["datetime"], outcome, bars_to_outcome, net, max_adv))
 
     if args.write_events:
         events = pd.DataFrame.from_records(records)
@@ -531,6 +574,38 @@ def main() -> None:
         lines.append("## Warning\n\nNo clean candidates were found under current criteria.\n")
 
     summary_path.write_text("\n".join(lines), encoding="utf-8")
+    if args.focused_only:
+        focused = results[
+            (results["table_id"] == 4)
+            & (results["session_bucket"] == args.focused_session_bucket)
+            & (results["hour"] == args.focused_hour)
+            & (results["wick_signal_bucket"] == args.focused_wick_signal_bucket)
+            & (results["target_pips"] == int(args.focused_target_pips))
+            & (results["adverse_pips"] == int(args.focused_adverse_pips))
+            & (results["max_hold_bars"] == int(args.focused_max_hold_bars))
+            & (results["direction_test"] == args.focused_direction_test)
+        ]
+        if not focused.empty:
+            fr = focused.iloc[0]
+            print("Focused summary:")
+            print(f"events={int(fr['events'])}")
+            print(f"hit_rate={fr['hit_rate']:.6f}")
+            print(f"adverse_failure_rate={fr['adverse_failure_rate']:.6f}")
+            print(f"timeout_rate={fr['timeout_rate']:.6f}")
+            print(f"avg_net_pips_after_costs={fr['avg_net_pips_after_costs']:.6f}")
+            print(f"total_net_pips_after_costs={fr['total_net_pips_after_costs']:.6f}")
+            print(f"profit_factor={fr['profit_factor']:.6f}")
+            print(f"IS_events={int(fr['IS_events'])}")
+            print(f"OOS_events={int(fr['OOS_events'])}")
+            print(f"IS_hit_rate={fr['IS_hit_rate']:.6f}")
+            print(f"OOS_hit_rate={fr['OOS_hit_rate']:.6f}")
+            print(f"IS_avg_net={fr['IS_avg_net']:.6f}")
+            print(f"OOS_avg_net={fr['OOS_avg_net']:.6f}")
+            print(f"wf_positive_windows={int(fr['wf_positive_windows'])} / wf_total_windows={int(fr['wf_total_windows'])}")
+            print(f"p95_max_adverse_pips_seen={fr['p95_max_adverse_pips_seen']:.6f}")
+            print(f"max_adverse_pips_seen={fr['max_adverse_pips_seen']:.6f}")
+        else:
+            print("Focused summary: no matching aggregated row found.")
     if args.write_events:
         print(f"Wrote: {events_path}")
     else:
