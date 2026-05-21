@@ -25,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--spread-pips", type=float, default=1.0)
     parser.add_argument("--slippage-pips", type=float, default=0.3)
     parser.add_argument("--output-dir", default="candle_behavior_reports")
-    parser.add_argument("--preset", choices=["quick", "full"], default="quick")
+    parser.add_argument("--preset", choices=["superquick", "quick", "full"], default="quick")
     parser.add_argument("--write-events", action="store_true", default=False)
     parser.add_argument("--max-rows", type=int, default=0)
     parser.add_argument("--max-scenarios", type=int, default=0)
@@ -194,6 +194,70 @@ def evaluate_signal_arrays(open_arr: np.ndarray, high_arr: np.ndarray, low_arr: 
     return "timeout", last_idx - entry_idx + 1, float(gross), max_fav, max_adv
 
 
+def evaluate_scenario_vectorized(open_arr: np.ndarray, high_arr: np.ndarray, low_arr: np.ndarray, close_arr: np.ndarray, direction: str, target_pips: int, adverse_pips: int, max_hold_bars: int):
+    n = len(open_arr)
+    signal_count = n - 1
+    if signal_count <= 0:
+        return None
+
+    pip = PIP_SIZE_EURUSD
+    entries = open_arr[1:]
+    target_px = entries + target_pips * pip if direction == "LONG" else entries - target_pips * pip
+    adverse_px = entries - adverse_pips * pip if direction == "LONG" else entries + adverse_pips * pip
+
+    max_fav = np.zeros(signal_count, dtype=float)
+    max_adv = np.zeros(signal_count, dtype=float)
+    first_hit_offset = np.zeros(signal_count, dtype=np.int32)
+    outcome = np.full(signal_count, "timeout", dtype=object)
+
+    idx = np.arange(signal_count)
+    max_offsets = np.minimum(max_hold_bars, n - (idx + 1))
+
+    for offset in range(1, max_hold_bars + 1):
+        active = (first_hit_offset == 0) & (max_offsets >= offset)
+        if not active.any():
+            break
+
+        future_idx = idx + offset
+        hi = high_arr[future_idx]
+        lo = low_arr[future_idx]
+
+        if direction == "LONG":
+            fav = np.maximum(0.0, (hi - entries) / pip)
+            adv = np.maximum(0.0, (entries - lo) / pip)
+            hit_target = hi >= target_px
+            hit_adverse = lo <= adverse_px
+        else:
+            fav = np.maximum(0.0, (entries - lo) / pip)
+            adv = np.maximum(0.0, (hi - entries) / pip)
+            hit_target = lo <= target_px
+            hit_adverse = hi >= adverse_px
+
+        max_fav = np.maximum(max_fav, fav)
+        max_adv = np.maximum(max_adv, adv)
+
+        hit_now = active & (hit_target | hit_adverse)
+        first_hit_offset[hit_now] = offset
+        outcome[hit_now & hit_adverse] = "adverse"
+        outcome[hit_now & (~hit_adverse) & hit_target] = "hit"
+
+    bars_to_outcome = np.where(first_hit_offset > 0, first_hit_offset, max_offsets).astype(np.int32)
+
+    close_idx = idx + max_offsets
+    timeout_gross = np.where(direction == "LONG", (close_arr[close_idx] - entries) / pip, (entries - close_arr[close_idx]) / pip)
+    gross = timeout_gross.astype(float)
+    gross[outcome == "hit"] = float(target_pips)
+    gross[outcome == "adverse"] = -float(adverse_pips)
+
+    return {
+        "outcome": outcome,
+        "bars_to_outcome": bars_to_outcome,
+        "gross": gross,
+        "max_fav": max_fav,
+        "max_adv": max_adv,
+    }
+
+
 def aggregate_from_buffers(group_buffers: Dict[Tuple, List[Tuple]], group_cols: List[str]) -> pd.DataFrame:
     rows = []
     for keys, evs in group_buffers.items():
@@ -269,6 +333,7 @@ def main() -> None:
         raise ValueError("This lab is restricted to M15 timeframe")
 
     grids = {
+        "superquick": {"target": [5, 6, 8, 10], "adverse": [30, 50], "hold": [20, 40, 80]},
         "quick": {"target": [5, 6, 7, 8, 9, 10], "adverse": [20, 30, 40, 50], "hold": [20, 40, 80]},
         "full": {"target": [5, 6, 7, 8, 9, 10, 12, 15], "adverse": [15, 20, 25, 30, 40, 50, 75], "hold": [10, 20, 40, 80]},
     }
@@ -313,22 +378,31 @@ def main() -> None:
             if args.max_scenarios > 0 and scenario_idx >= scenarios:
                 break
             scenario_idx += 1
-            log_every = 5 if args.preset == "quick" else 20
-            if scenario_idx == 1 or scenario_idx % log_every == 0 or scenario_idx == scenarios:
-                print(f"Processing scenario {scenario_idx}/{scenarios}")
+            if scenario_idx == 1 or scenario_idx % 5 == 0 or scenario_idx == scenarios:
+                print(f"Processing scenario {scenario_idx}/{scenarios} | elapsed={time.perf_counter() - start_ts:.2f}s")
+            ev = evaluate_scenario_vectorized(open_arr, high_arr, low_arr, close_arr, direction, target, adverse, hold)
+            if ev is None:
+                continue
+            outcomes = ev["outcome"]
+            bars_to_outcomes = ev["bars_to_outcome"]
+            gross_arr = ev["gross"]
+            max_fav_arr = ev["max_fav"]
+            max_adv_arr = ev["max_adv"]
+            net_arr = gross_arr - cost_pips
+
             for i in range(len(df) - 1):
-                ev = evaluate_signal_arrays(open_arr, high_arr, low_arr, close_arr, i, direction, target, adverse, hold)
-                if ev is None:
-                    continue
-                outcome, bars_to_outcome, gross, max_fav, max_adv = ev
                 row = df.iloc[i]
-                entry_dt = df.iloc[i + 1]["datetime"]
-                net = gross - cost_pips
+                outcome = outcomes[i]
+                bars_to_outcome = int(bars_to_outcomes[i])
+                gross = float(gross_arr[i])
+                max_fav = float(max_fav_arr[i])
+                max_adv = float(max_adv_arr[i])
+                net = float(net_arr[i])
                 if args.write_events:
                     rec = {k: row[k] for k in base_cols}
                     rec.update({
                     "signal_datetime": row["datetime"],
-                    "entry_datetime": entry_dt,
+                    "entry_datetime": df.iloc[i + 1]["datetime"],
                     "direction_test": direction,
                     "target_pips": target,
                     "adverse_pips": adverse,
