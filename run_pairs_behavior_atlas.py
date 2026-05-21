@@ -112,7 +112,7 @@ def correlation_regime(series: pd.Series) -> pd.Series:
             series <= -0.20,
         ],
         ["high_positive", "medium_positive", "low_or_broken", "negative"],
-        default=np.nan,
+        default="unknown",
     )
     return pd.Series(out, index=series.index, dtype="object")
 
@@ -128,13 +128,15 @@ def zscore_bucket(series: pd.Series) -> pd.Series:
         "plus_2_to_3",
         "above_plus_3",
     ]
-    return pd.cut(series, bins=bins, labels=labels).astype(str)
+    out = pd.cut(series, bins=bins, labels=labels)
+    return pd.Series(out.astype("object").where(~out.isna(), "unknown"), index=series.index, dtype="object")
 
 
 def abs_zscore_bucket(series: pd.Series) -> pd.Series:
     bins = [0, 1, 2, 3, np.inf]
     labels = ["0_1", "1_2", "2_3", "3_plus"]
-    return pd.cut(series, bins=bins, labels=labels, include_lowest=True).astype(str)
+    out = pd.cut(series, bins=bins, labels=labels, include_lowest=True)
+    return pd.Series(out.astype("object").where(~out.isna(), "unknown"), index=series.index, dtype="object")
 
 
 def first_touch_metrics(z_values: np.ndarray, current_z: np.ndarray, level: float):
@@ -298,11 +300,12 @@ def main() -> int:
         beta_change_roll = df[beta_abs_change_col].rolling(w).mean()
         q1 = beta_change_roll.quantile(1 / 3)
         q2 = beta_change_roll.quantile(2 / 3)
-        df[f"beta_stability_{w}"] = np.select(
+        beta_stability = np.select(
             [beta_change_roll <= q1, (beta_change_roll > q1) & (beta_change_roll <= q2), beta_change_roll > q2],
             ["low_change", "medium_change", "high_change"],
-            default=np.nan,
+            default="unknown",
         )
+        df[f"beta_stability_{w}"] = pd.Series(beta_stability, index=df.index, dtype="object")
 
         df[f"zscore_bucket_{w}"] = zscore_bucket(df[z_col])
         df[f"abs_zscore_bucket_{w}"] = abs_zscore_bucket(df[f"zscore_abs_{w}"])
