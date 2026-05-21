@@ -219,27 +219,45 @@ def evaluate_scenario_vectorized(open_arr: np.ndarray, high_arr: np.ndarray, low
             break
 
         future_idx = idx + offset
-        hi = high_arr[future_idx]
-        lo = low_arr[future_idx]
+        valid = future_idx < len(high_arr)
+        eval_mask = active & valid
+        if not eval_mask.any():
+            continue
+
+        valid_future_idx = future_idx[eval_mask]
+        if valid_future_idx.size:
+            assert int(valid_future_idx.max()) < len(high_arr), "future_idx out of bounds for high_arr"
+            assert int(valid_future_idx.max()) < len(low_arr), "future_idx out of bounds for low_arr"
+
+        hi = high_arr[valid_future_idx]
+        lo = low_arr[valid_future_idx]
+        eval_entries = entries[eval_mask]
+        eval_target_px = target_px[eval_mask]
+        eval_adverse_px = adverse_px[eval_mask]
 
         if direction == "LONG":
-            fav = np.maximum(0.0, (hi - entries) / pip)
-            adv = np.maximum(0.0, (entries - lo) / pip)
-            hit_target = hi >= target_px
-            hit_adverse = lo <= adverse_px
+            fav = np.maximum(0.0, (hi - eval_entries) / pip)
+            adv = np.maximum(0.0, (eval_entries - lo) / pip)
+            hit_target = hi >= eval_target_px
+            hit_adverse = lo <= eval_adverse_px
         else:
-            fav = np.maximum(0.0, (entries - lo) / pip)
-            adv = np.maximum(0.0, (hi - entries) / pip)
-            hit_target = lo <= target_px
-            hit_adverse = hi >= adverse_px
+            fav = np.maximum(0.0, (eval_entries - lo) / pip)
+            adv = np.maximum(0.0, (hi - eval_entries) / pip)
+            hit_target = lo <= eval_target_px
+            hit_adverse = hi >= eval_adverse_px
 
-        max_fav = np.maximum(max_fav, fav)
-        max_adv = np.maximum(max_adv, adv)
+        max_fav[eval_mask] = np.maximum(max_fav[eval_mask], fav)
+        max_adv[eval_mask] = np.maximum(max_adv[eval_mask], adv)
 
-        hit_now = active & (hit_target | hit_adverse)
+        hit_now = np.zeros(signal_count, dtype=bool)
+        hit_now[eval_mask] = hit_target | hit_adverse
+        hit_adverse_full = np.zeros(signal_count, dtype=bool)
+        hit_adverse_full[eval_mask] = hit_adverse
+        hit_target_full = np.zeros(signal_count, dtype=bool)
+        hit_target_full[eval_mask] = hit_target
         first_hit_offset[hit_now] = offset
-        outcome[hit_now & hit_adverse] = "adverse"
-        outcome[hit_now & (~hit_adverse) & hit_target] = "hit"
+        outcome[hit_now & hit_adverse_full] = "adverse"
+        outcome[hit_now & (~hit_adverse_full) & hit_target_full] = "hit"
 
     bars_to_outcome = np.where(first_hit_offset > 0, first_hit_offset, max_offsets).astype(np.int32)
 
