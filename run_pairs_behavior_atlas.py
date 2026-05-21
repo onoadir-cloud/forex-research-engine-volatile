@@ -168,6 +168,62 @@ def first_touch_metrics(z_values: np.ndarray, current_z: np.ndarray, level: floa
     return bars, max_abs_before
 
 
+
+
+def first_touch_relative_label(
+    z_values: np.ndarray,
+    current_z: np.ndarray,
+    normalization_level: float,
+    divergence_abs_level: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    n = len(current_z)
+    labels = np.full(n, "unknown", dtype=object)
+    bars = np.full(n, np.nan)
+
+    for i in range(n):
+        z_now = current_z[i]
+        if np.isnan(z_now):
+            labels[i] = "unknown"
+            continue
+
+        row = z_values[i]
+        idx_norm = None
+        idx_div = None
+
+        norm_label = "normalized_0_first" if normalization_level == 0.0 else "normalized_0_5_first"
+
+        for j, val in enumerate(row):
+            if np.isnan(val):
+                continue
+            if idx_norm is None:
+                if z_now >= 0 and val <= normalization_level:
+                    idx_norm = j
+                elif z_now < 0 and val >= -normalization_level:
+                    idx_norm = j
+            if idx_div is None and abs(val) >= divergence_abs_level:
+                idx_div = j
+            if idx_norm is not None and idx_div is not None:
+                break
+
+        if idx_norm is None and idx_div is None:
+            labels[i] = "neither"
+        elif idx_norm is None:
+            labels[i] = f"moved_further_to_{int(divergence_abs_level)}_first"
+            bars[i] = idx_div + 1
+        elif idx_div is None:
+            labels[i] = norm_label
+            bars[i] = idx_norm + 1
+        elif idx_norm == idx_div:
+            labels[i] = "both_same_bar"
+            bars[i] = idx_norm + 1
+        elif idx_norm < idx_div:
+            labels[i] = norm_label
+            bars[i] = idx_norm + 1
+        else:
+            labels[i] = f"moved_further_to_{int(divergence_abs_level)}_first"
+            bars[i] = idx_div + 1
+
+    return labels, bars
 def build_future_arrays(series: pd.Series, horizon: int) -> np.ndarray:
     vals = series.to_numpy()
     n = len(vals)
@@ -200,6 +256,21 @@ def summarize_group(base: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
         median_bars_to_normalized_1=("bars_to_normalized_1", "median"),
         median_bars_to_normalized_0_5=("bars_to_normalized_0_5", "median"),
         median_bars_to_normalized_0=("bars_to_normalized_0", "median"),
+        normalized_0_5_first_vs_3_rate=("normalized_0_5_first_vs_3", "mean"),
+        moved_further_to_3_first_vs_0_5_rate=("moved_further_to_3_first_vs_0_5", "mean"),
+        both_same_bar_0_5_vs_3_rate=("both_same_bar_0_5_vs_3", "mean"),
+        neither_0_5_vs_3_rate=("neither_0_5_vs_3", "mean"),
+        normalized_0_first_vs_3_rate=("normalized_0_first_vs_3", "mean"),
+        moved_further_to_3_first_vs_0_rate=("moved_further_to_3_first_vs_0", "mean"),
+        both_same_bar_0_vs_3_rate=("both_same_bar_0_vs_3", "mean"),
+        neither_0_vs_3_rate=("neither_0_vs_3", "mean"),
+        normalized_0_5_first_vs_4_rate=("normalized_0_5_first_vs_4", "mean"),
+        moved_further_to_4_first_vs_0_5_rate=("moved_further_to_4_first_vs_0_5", "mean"),
+        both_same_bar_0_5_vs_4_rate=("both_same_bar_0_5_vs_4", "mean"),
+        neither_0_5_vs_4_rate=("neither_0_5_vs_4", "mean"),
+        median_bars_to_first_touch_0_5_vs_3=("bars_to_first_touch_0_5_vs_3", "median"),
+        median_bars_to_first_touch_0_vs_3=("bars_to_first_touch_0_vs_3", "median"),
+        median_bars_to_first_touch_0_5_vs_4=("bars_to_first_touch_0_5_vs_4", "median"),
         mean_future_abs_zscore_min=("future_abs_zscore_min", "mean"),
         mean_future_abs_zscore_max=("future_abs_zscore_max", "mean"),
     ).reset_index()
@@ -215,6 +286,12 @@ def summarize_group(base: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
                 "OOS_moved_further_to_abs_z_3_rate": g.loc[g["split"] == "OOS", "moved_further_to_abs_z_3"].mean(),
                 "WF_normalized_to_0_5_std": g.groupby("wf_split")["normalized_to_0_5"].mean().std(),
                 "WF_moved_further_to_abs_z_3_std": g.groupby("wf_split")["moved_further_to_abs_z_3"].mean().std(),
+                "IS_normalized_0_5_first_vs_3_rate": g.loc[g["split"] == "IS", "normalized_0_5_first_vs_3"].mean(),
+                "OOS_normalized_0_5_first_vs_3_rate": g.loc[g["split"] == "OOS", "normalized_0_5_first_vs_3"].mean(),
+                "IS_moved_further_to_3_first_vs_0_5_rate": g.loc[g["split"] == "IS", "moved_further_to_3_first_vs_0_5"].mean(),
+                "OOS_moved_further_to_3_first_vs_0_5_rate": g.loc[g["split"] == "OOS", "moved_further_to_3_first_vs_0_5"].mean(),
+                "WF_normalized_0_5_first_vs_3_std": g.groupby("wf_split")["normalized_0_5_first_vs_3"].mean().std(),
+                "WF_moved_further_to_3_first_vs_0_5_std": g.groupby("wf_split")["moved_further_to_3_first_vs_0_5"].mean().std(),
             }
         )
     ).reset_index()
@@ -337,6 +414,17 @@ def main() -> int:
             df[f"moved_further_to_abs_z_3{base}"] = np.nanmax(abs_future, axis=1) >= 3.0
             df[f"moved_further_to_abs_z_4{base}"] = np.nanmax(abs_future, axis=1) >= 4.0
 
+            label_0_5_vs_3, bars_0_5_vs_3 = first_touch_relative_label(z_future, z_now, 0.5, 3.0)
+            label_0_vs_3, bars_0_vs_3 = first_touch_relative_label(z_future, z_now, 0.0, 3.0)
+            label_0_5_vs_4, bars_0_5_vs_4 = first_touch_relative_label(z_future, z_now, 0.5, 4.0)
+
+            df[f"first_touch_0_5_vs_3{base}"] = label_0_5_vs_3
+            df[f"first_touch_0_vs_3{base}"] = label_0_vs_3
+            df[f"first_touch_0_5_vs_4{base}"] = label_0_5_vs_4
+            df[f"bars_to_first_touch_0_5_vs_3{base}"] = bars_0_5_vs_3
+            df[f"bars_to_first_touch_0_vs_3{base}"] = bars_0_vs_3
+            df[f"bars_to_first_touch_0_5_vs_4{base}"] = bars_0_5_vs_4
+
             b1, max_before_1 = first_touch_metrics(z_future, z_now, 1.0)
             b05, _ = first_touch_metrics(z_future, z_now, 0.5)
             b0, _ = first_touch_metrics(z_future, z_now, 0.0)
@@ -367,6 +455,24 @@ def main() -> int:
                     "bars_to_normalized_1": df[f"bars_to_normalized_1{base}"],
                     "bars_to_normalized_0_5": df[f"bars_to_normalized_0_5{base}"],
                     "bars_to_normalized_0": df[f"bars_to_normalized_0{base}"],
+                    "first_touch_0_5_vs_3": df[f"first_touch_0_5_vs_3{base}"],
+                    "first_touch_0_vs_3": df[f"first_touch_0_vs_3{base}"],
+                    "first_touch_0_5_vs_4": df[f"first_touch_0_5_vs_4{base}"],
+                    "normalized_0_5_first_vs_3": (df[f"first_touch_0_5_vs_3{base}"] == "normalized_0_5_first").astype(float),
+                    "moved_further_to_3_first_vs_0_5": (df[f"first_touch_0_5_vs_3{base}"] == "moved_further_to_3_first").astype(float),
+                    "both_same_bar_0_5_vs_3": (df[f"first_touch_0_5_vs_3{base}"] == "both_same_bar").astype(float),
+                    "neither_0_5_vs_3": (df[f"first_touch_0_5_vs_3{base}"] == "neither").astype(float),
+                    "normalized_0_first_vs_3": (df[f"first_touch_0_vs_3{base}"] == "normalized_0_first").astype(float),
+                    "moved_further_to_3_first_vs_0": (df[f"first_touch_0_vs_3{base}"] == "moved_further_to_3_first").astype(float),
+                    "both_same_bar_0_vs_3": (df[f"first_touch_0_vs_3{base}"] == "both_same_bar").astype(float),
+                    "neither_0_vs_3": (df[f"first_touch_0_vs_3{base}"] == "neither").astype(float),
+                    "normalized_0_5_first_vs_4": (df[f"first_touch_0_5_vs_4{base}"] == "normalized_0_5_first").astype(float),
+                    "moved_further_to_4_first_vs_0_5": (df[f"first_touch_0_5_vs_4{base}"] == "moved_further_to_4_first").astype(float),
+                    "both_same_bar_0_5_vs_4": (df[f"first_touch_0_5_vs_4{base}"] == "both_same_bar").astype(float),
+                    "neither_0_5_vs_4": (df[f"first_touch_0_5_vs_4{base}"] == "neither").astype(float),
+                    "bars_to_first_touch_0_5_vs_3": df[f"bars_to_first_touch_0_5_vs_3{base}"],
+                    "bars_to_first_touch_0_vs_3": df[f"bars_to_first_touch_0_vs_3{base}"],
+                    "bars_to_first_touch_0_5_vs_4": df[f"bars_to_first_touch_0_5_vs_4{base}"],
                     "future_abs_zscore_min": df[f"future_abs_zscore_min{base}"],
                     "future_abs_zscore_max": df[f"future_abs_zscore_max{base}"],
                     "split": df["split"],
@@ -450,6 +556,12 @@ def main() -> int:
             "bars_to_normalized_0_5_w_h",
             "bars_to_normalized_0_w_h",
             "max_abs_zscore_before_normalization_w_h",
+            "first_touch_0_5_vs_3_w_h",
+            "first_touch_0_vs_3_w_h",
+            "first_touch_0_5_vs_4_w_h",
+            "bars_to_first_touch_0_5_vs_3_w_h",
+            "bars_to_first_touch_0_vs_3_w_h",
+            "bars_to_first_touch_0_5_vs_4_w_h",
         ],
     }
 
