@@ -47,6 +47,8 @@ BASE_OUTPUT_COLUMNS = [
     "median_abs_zscore",
     "p90_abs_zscore",
     "p95_abs_zscore",
+    "norm_first_gap",
+    "div_first_gap",
 ]
 
 OPTIONAL_COLUMNS = [
@@ -59,187 +61,173 @@ OPTIONAL_COLUMNS = [
 ]
 
 SECTION_SPECS = [
+    {"name": "highest_normalized_0_5_before_abs_z_3", "sort_metric": "normalized_0_5_first_vs_3_rate"},
     {
-        "name": "1. Highest normalized 0.5 before abs z 3",
-        "sort": ["normalized_0_5_first_vs_3_rate", "observations"],
-        "ascending": [False, False],
+        "name": "highest_moved_further_to_abs_z_3_before_normalized_0_5",
+        "sort_metric": "moved_further_to_3_first_vs_0_5_rate",
+    },
+    {"name": "highest_normalized_0_before_abs_z_3", "sort_metric": "normalized_0_first_vs_3_rate"},
+    {
+        "name": "highest_moved_further_to_abs_z_3_before_normalized_0",
+        "sort_metric": "moved_further_to_3_first_vs_0_rate",
+    },
+    {"name": "highest_normalized_0_5_before_abs_z_4", "sort_metric": "normalized_0_5_first_vs_4_rate"},
+    {
+        "name": "highest_moved_further_to_abs_z_4_before_normalized_0_5",
+        "sort_metric": "moved_further_to_4_first_vs_0_5_rate",
     },
     {
-        "name": "2. Highest moved further to abs z 3 before normalized 0.5",
-        "sort": ["moved_further_to_3_first_vs_0_5_rate", "observations"],
-        "ascending": [False, False],
+        "name": "stable_normalization_first_contexts",
+        "sort_metric": "normalized_0_5_first_vs_3_rate",
+        "stable_gap": "norm_first_gap",
     },
     {
-        "name": "3. Highest normalized 0 before abs z 3",
-        "sort": ["normalized_0_first_vs_3_rate", "observations"],
-        "ascending": [False, False],
+        "name": "stable_divergence_first_contexts",
+        "sort_metric": "moved_further_to_3_first_vs_0_5_rate",
+        "stable_gap": "div_first_gap",
     },
     {
-        "name": "4. Highest moved further to abs z 3 before normalized 0",
-        "sort": ["moved_further_to_3_first_vs_0_rate", "observations"],
-        "ascending": [False, False],
+        "name": "window_comparison",
+        "groupby": ["window"],
+        "sort_metric": "normalized_0_5_first_vs_3_rate",
     },
     {
-        "name": "5. Highest normalized 0.5 before abs z 4",
-        "sort": ["normalized_0_5_first_vs_4_rate", "observations"],
-        "ascending": [False, False],
+        "name": "session_comparison",
+        "groupby": ["session_bucket"],
+        "sort_metric": "normalized_0_5_first_vs_3_rate",
     },
     {
-        "name": "6. Highest moved further to abs z 4 before normalized 0.5",
-        "sort": ["moved_further_to_4_first_vs_0_5_rate", "observations"],
-        "ascending": [False, False],
+        "name": "abs_zscore_bucket_comparison",
+        "groupby": ["abs_zscore_bucket"],
+        "sort_metric": "normalized_0_5_first_vs_3_rate",
     },
     {
-        "name": "7. Stable normalization-first contexts",
-        "sort": ["normalized_0_5_first_vs_3_rate", "observations"],
-        "ascending": [False, False],
-        "stable_col_a": "IS_normalized_0_5_first_vs_3_rate",
-        "stable_col_b": "OOS_normalized_0_5_first_vs_3_rate",
-    },
-    {
-        "name": "8. Stable divergence-first contexts",
-        "sort": ["moved_further_to_3_first_vs_0_5_rate", "observations"],
-        "ascending": [False, False],
-        "stable_col_a": "IS_moved_further_to_3_first_vs_0_5_rate",
-        "stable_col_b": "OOS_moved_further_to_3_first_vs_0_5_rate",
-    },
-    {
-        "name": "9. Window comparison",
-        "groupby": ["window", "horizon_bars"],
-        "sort": ["normalized_0_5_first_vs_3_rate", "observations"],
-        "ascending": [False, False],
-    },
-    {
-        "name": "10. Session comparison",
-        "groupby": ["window", "horizon_bars", "session_bucket"],
-        "sort": ["normalized_0_5_first_vs_3_rate", "observations"],
-        "ascending": [False, False],
-    },
-    {
-        "name": "11. Abs zscore bucket comparison",
-        "groupby": ["window", "horizon_bars", "abs_zscore_bucket"],
-        "sort": ["normalized_0_5_first_vs_3_rate", "observations"],
-        "ascending": [False, False],
-    },
-    {
-        "name": "12. Correlation regime + abs zscore bucket comparison",
-        "groupby": ["window", "horizon_bars", "correlation_regime", "abs_zscore_bucket"],
-        "sort": ["normalized_0_5_first_vs_3_rate", "observations"],
-        "ascending": [False, False],
+        "name": "correlation_regime_abs_zscore_bucket_comparison",
+        "groupby": ["correlation_regime", "abs_zscore_bucket"],
+        "sort_metric": "normalized_0_5_first_vs_3_rate",
     },
 ]
 
+REQUIRED_COLUMNS = [
+    "window",
+    "horizon_bars",
+    "grouping",
+    "observations",
+    "normalized_0_5_first_vs_3_rate",
+    "moved_further_to_3_first_vs_0_5_rate",
+    "normalized_0_first_vs_3_rate",
+    "moved_further_to_3_first_vs_0_rate",
+    "normalized_0_5_first_vs_4_rate",
+    "moved_further_to_4_first_vs_0_5_rate",
+]
 
-def _format_val(v: object, digits: int = 4) -> str:
-    if pd.isna(v):
-        return "n/a"
-    if isinstance(v, float):
-        return f"{v:.{digits}f}"
-    return str(v)
+METRIC_COLUMNS = [
+    "normalized_0_5_first_vs_3_rate",
+    "moved_further_to_3_first_vs_0_5_rate",
+    "normalized_0_first_vs_3_rate",
+    "moved_further_to_3_first_vs_0_rate",
+    "normalized_0_5_first_vs_4_rate",
+    "moved_further_to_4_first_vs_0_5_rate",
+]
 
 
-def _require_columns(df: pd.DataFrame, required: Iterable[str]) -> None:
+def _require_columns(df: pd.DataFrame, required: Iterable[str]) -> list[str]:
     missing = [c for c in required if c not in df.columns]
     if missing:
-        raise ValueError(f"Input is missing required columns: {missing}")
-
-
-def _avg_existing(grouped: pd.core.groupby.generic.DataFrameGroupBy, cols: list[str]) -> pd.DataFrame:
-    use_cols = [c for c in cols if c in grouped.obj.columns]
-    if not use_cols:
-        return pd.DataFrame(index=grouped.size().index)
-    return grouped[use_cols].mean(numeric_only=True)
+        missing_text = ", ".join(missing)
+        raise ValueError(f"Missing required columns: {missing_text}")
+    return list(required)
 
 
 def _build_grouped_section(df: pd.DataFrame, section: dict) -> pd.DataFrame:
     group_cols = section["groupby"]
+    numeric_cols = [c for c in BASE_OUTPUT_COLUMNS + OPTIONAL_COLUMNS if c in df.columns and c != "section"]
     grouped = df.groupby(group_cols, dropna=False)
-    rows = grouped.size().rename("observations").to_frame()
-
-    avg_cols = [c for c in BASE_OUTPUT_COLUMNS + OPTIONAL_COLUMNS if c != "section" and c != "observations"]
-    avg_df = _avg_existing(grouped, avg_cols)
-    out = rows.join(avg_df, how="left").reset_index()
-    out["grouping"] = " + ".join(group_cols)
-
-    for c in ["session_bucket", "hour", "correlation_regime", "beta_stability", "zscore_bucket", "abs_zscore_bucket"]:
+    out = grouped[numeric_cols].mean(numeric_only=True).reset_index()
+    for c in group_cols:
         if c not in out.columns:
             out[c] = pd.NA
-
-    out.insert(0, "section", section["name"])
-    out = out.sort_values(by=section["sort"], ascending=section["ascending"]).head(10)
+    out["grouping"] = " + ".join(group_cols)
     return out
 
 
-def _build_top_section(df: pd.DataFrame, section: dict) -> pd.DataFrame:
-    out = df.copy()
-    col_a = section.get("stable_col_a")
-    col_b = section.get("stable_col_b")
-    if col_a and col_b:
-        _require_columns(out, [col_a, col_b])
-        out = out[(out[col_a] - out[col_b]).abs() <= 0.05]
-
-    out = out.sort_values(by=section["sort"], ascending=section["ascending"]).head(10).copy()
-    out.insert(0, "section", section["name"])
-    return out
-
-
-def build_digest(df: pd.DataFrame) -> pd.DataFrame:
+def build_digest(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]]:
+    warnings: dict[str, str] = {}
     frames: list[pd.DataFrame] = []
+
+    has_norm_stability = {"IS_normalized_0_5_first_vs_3_rate", "OOS_normalized_0_5_first_vs_3_rate"}.issubset(df.columns)
+    has_div_stability = {"IS_moved_further_to_3_first_vs_0_5_rate", "OOS_moved_further_to_3_first_vs_0_5_rate"}.issubset(df.columns)
+
+    if has_norm_stability:
+        df["norm_first_gap"] = (df["IS_normalized_0_5_first_vs_3_rate"] - df["OOS_normalized_0_5_first_vs_3_rate"]).abs()
+    else:
+        df["norm_first_gap"] = pd.NA
+
+    if has_div_stability:
+        df["div_first_gap"] = (
+            df["IS_moved_further_to_3_first_vs_0_5_rate"] - df["OOS_moved_further_to_3_first_vs_0_5_rate"]
+        ).abs()
+    else:
+        df["div_first_gap"] = pd.NA
+
     for section in SECTION_SPECS:
-        part = _build_grouped_section(df, section) if "groupby" in section else _build_top_section(df, section)
+        sort_metric = section["sort_metric"]
+        part = _build_grouped_section(df, section) if "groupby" in section else df.copy()
+
+        stability_gap_col = section.get("stable_gap")
+        if stability_gap_col:
+            if part[stability_gap_col].notna().any():
+                part = part.sort_values(by=[stability_gap_col, sort_metric], ascending=[True, False])
+            else:
+                warnings[section["name"]] = (
+                    f"Warning: stability gap column {stability_gap_col} is unavailable or all NaN; "
+                    "stability filter skipped."
+                )
+
+        part = part[part[sort_metric].notna()].sort_values(by=sort_metric, ascending=False).head(10).copy()
+        part.insert(0, "section", section["name"])
         frames.append(part)
 
-    out = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-
+    out = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=BASE_OUTPUT_COLUMNS)
     output_cols = BASE_OUTPUT_COLUMNS + [c for c in OPTIONAL_COLUMNS if c in out.columns]
     for c in output_cols:
         if c not in out.columns:
             out[c] = pd.NA
-    return out[output_cols]
+    return out[output_cols], warnings
 
 
-def build_markdown(df: pd.DataFrame, md_path: Path, source_name: str) -> None:
+def build_markdown(
+    digest_df: pd.DataFrame,
+    md_path: Path,
+    source_path: Path,
+    source_row_count: int,
+    filtered_row_count: int,
+    found_required_columns: list[str],
+    section_warnings: dict[str, str],
+) -> None:
     lines = [
-        f"# First-Touch Digest: {source_name}",
+        "# First-Touch Digest",
         "",
-        "Descriptive first-touch relative behavior only across relative spread and z-score context.",
+        f"- Source file path: `{source_path}`",
+        f"- Source row count: {source_row_count}",
+        f"- Filtered row count (observations >= threshold): {filtered_row_count}",
+        f"- Required columns found: {', '.join(found_required_columns)}",
         "",
     ]
 
     for section in SECTION_SPECS:
         name = section["name"]
-        rows = df[df["section"] == name].head(10)
+        rows = digest_df[digest_df["section"] == name].head(10)
         lines.append(f"## {name}")
+        if name in section_warnings:
+            lines.append(section_warnings[name])
+            lines.append("")
         if rows.empty:
-            lines.append("No rows met filters.")
+            lines.append("No rows for this section.")
             lines.append("")
             continue
-
-        for _, row in rows.iterrows():
-            compact_context = (
-                f"session={_format_val(row.get('session_bucket'))}, "
-                f"hour={_format_val(row.get('hour'))}, "
-                f"corr_regime={_format_val(row.get('correlation_regime'))}, "
-                f"beta_stability={_format_val(row.get('beta_stability'))}, "
-                f"abs_z_bucket={_format_val(row.get('abs_zscore_bucket'))}"
-            )
-            line = (
-                f"- window={_format_val(row.get('window'))} | "
-                f"horizon={_format_val(row.get('horizon_bars'))} | "
-                f"grouping={_format_val(row.get('grouping'))} | "
-                f"observations={_format_val(row.get('observations'))} | "
-                f"context={compact_context} | "
-                f"normalization-first={_format_val(row.get('normalized_0_5_first_vs_3_rate'))} | "
-                f"divergence-first={_format_val(row.get('moved_further_to_3_first_vs_0_5_rate'))} | "
-                f"IS/OOS norm={_format_val(row.get('IS_normalized_0_5_first_vs_3_rate'))}/"
-                f"{_format_val(row.get('OOS_normalized_0_5_first_vs_3_rate'))} | "
-                f"IS/OOS div={_format_val(row.get('IS_moved_further_to_3_first_vs_0_5_rate'))}/"
-                f"{_format_val(row.get('OOS_moved_further_to_3_first_vs_0_5_rate'))} | "
-                f"median bars 0.5vs3={_format_val(row.get('median_bars_to_first_touch_0_5_vs_3'))}, "
-                f"0vs3={_format_val(row.get('median_bars_to_first_touch_0_vs_3'))}, "
-                f"0.5vs4={_format_val(row.get('median_bars_to_first_touch_0_5_vs_4'))}"
-            )
-            lines.append(line)
+        table = rows.to_markdown(index=False)
+        lines.append(table)
         lines.append("")
 
     md_path.write_text("\n".join(lines), encoding="utf-8")
@@ -260,29 +248,31 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     df = pd.read_csv(in_path)
-    required = [
-        "observations",
-        "window",
-        "horizon_bars",
-        "grouping",
-        "normalized_0_5_first_vs_3_rate",
-        "moved_further_to_3_first_vs_0_5_rate",
-        "normalized_0_first_vs_3_rate",
-        "moved_further_to_3_first_vs_0_rate",
-        "normalized_0_5_first_vs_4_rate",
-        "moved_further_to_4_first_vs_0_5_rate",
-    ]
-    _require_columns(df, required)
+    found_required_columns = _require_columns(df, REQUIRED_COLUMNS)
 
-    df = df[df["observations"] >= args.min_observations].copy()
+    for metric in METRIC_COLUMNS:
+        df[metric] = pd.to_numeric(df[metric], errors="coerce")
+    df["observations"] = pd.to_numeric(df["observations"], errors="coerce")
 
-    digest_df = build_digest(df)
+    source_row_count = len(df)
+    filtered_df = df[df["observations"] >= args.min_observations].copy()
+    filtered_row_count = len(filtered_df)
+
+    digest_df, section_warnings = build_digest(filtered_df)
 
     csv_path = out_dir / "EURUSD_GBPUSD_first_touch_digest.csv"
     md_path = out_dir / "EURUSD_GBPUSD_first_touch_digest.md"
 
     digest_df.to_csv(csv_path, index=False)
-    build_markdown(digest_df, md_path, in_path.stem)
+    build_markdown(
+        digest_df,
+        md_path,
+        in_path,
+        source_row_count,
+        filtered_row_count,
+        found_required_columns,
+        section_warnings,
+    )
 
     print(f"Wrote {csv_path}")
     print(f"Wrote {md_path}")
