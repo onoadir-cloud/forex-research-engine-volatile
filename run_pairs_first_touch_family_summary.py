@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize EURUSD/GBPUSD first-touch digest into descriptive relative-behavior families."""
+"""Summarize first-touch digest into descriptive relative-behavior families."""
 
 from __future__ import annotations
 
@@ -101,14 +101,10 @@ REQUIRED_COLUMNS = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--input",
-        default="pairs_behavior_atlas_reports_quick/readouts/EURUSD_GBPUSD_first_touch_digest.csv",
-    )
-    parser.add_argument(
-        "--fallback-input",
-        default="pairs_behavior_atlas_reports_quick/EURUSD_GBPUSD_pairs_grouped_behavior.csv",
-    )
+    parser.add_argument("--symbol-a", default="EURUSD")
+    parser.add_argument("--symbol-b", default="GBPUSD")
+    parser.add_argument("--input", default=None)
+    parser.add_argument("--fallback-input", default=None)
     parser.add_argument(
         "--output-dir",
         default="pairs_behavior_atlas_reports_quick/readouts",
@@ -240,7 +236,7 @@ def summarize_family(name: str, family_df: pd.DataFrame) -> Dict[str, object]:
 
 def build_markdown(source_path: Path, source_rows: int, family_frames: Dict[str, pd.DataFrame]) -> str:
     lines: List[str] = [
-        "# EURUSD/GBPUSD First-Touch Relative Behavior Families",
+        "# First-Touch Relative Behavior Families",
         "",
         f"Source: `{source_path}`",
         f"Source row count: **{source_rows}**",
@@ -271,8 +267,9 @@ def build_markdown(source_path: Path, source_rows: int, family_frames: Dict[str,
 
 def main() -> None:
     args = parse_args()
-    primary = Path(args.input)
-    fallback = Path(args.fallback_input)
+    pair_prefix = f"{args.symbol_a}_{args.symbol_b}"
+    primary = Path(args.input) if args.input else Path(f"pairs_behavior_atlas_reports_quick/readouts/{pair_prefix}_first_touch_digest.csv")
+    fallback = Path(args.fallback_input) if args.fallback_input else Path(f"pairs_behavior_atlas_reports_quick/{pair_prefix}_pairs_grouped_behavior.csv")
     out_dir = Path(args.output_dir)
 
     df, source_path = load_input(primary, fallback)
@@ -290,8 +287,8 @@ def main() -> None:
         summary_rows.append(summarize_family(family_name, filtered))
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    csv_out = out_dir / "EURUSD_GBPUSD_first_touch_families.csv"
-    md_out = out_dir / "EURUSD_GBPUSD_first_touch_families.md"
+    csv_out = out_dir / f"{pair_prefix}_first_touch_families.csv"
+    md_out = out_dir / f"{pair_prefix}_first_touch_families.md"
 
     pd.DataFrame(summary_rows).to_csv(csv_out, index=False)
     md_out.write_text(build_markdown(source_path, len(df), family_frames), encoding="utf-8")

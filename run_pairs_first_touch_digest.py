@@ -9,7 +9,6 @@ from typing import Iterable
 
 import pandas as pd
 
-INPUT_DEFAULT = "pairs_behavior_atlas_reports_quick/EURUSD_GBPUSD_pairs_grouped_behavior.csv"
 OUTPUT_DIR_DEFAULT = "pairs_behavior_atlas_reports_quick/readouts"
 
 BASE_OUTPUT_COLUMNS = [
@@ -251,7 +250,9 @@ def build_markdown(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Create first-touch digest files from grouped pairs behavior CSV.")
-    parser.add_argument("--input", default=INPUT_DEFAULT, help="Input grouped behavior CSV path")
+    parser.add_argument("--symbol-a", default="EURUSD", help="First symbol in pair prefix")
+    parser.add_argument("--symbol-b", default="GBPUSD", help="Second symbol in pair prefix")
+    parser.add_argument("--input", default=None, help="Input grouped behavior CSV path")
     parser.add_argument("--output-dir", default=OUTPUT_DIR_DEFAULT, help="Output directory for digest files")
     parser.add_argument("--min-observations", type=int, default=200, help="Minimum observations filter")
     return parser.parse_args()
@@ -259,7 +260,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    in_path = Path(args.input)
+    pair_prefix = f"{args.symbol_a}_{args.symbol_b}"
+    in_path = Path(args.input) if args.input else Path(f"pairs_behavior_atlas_reports_quick/{pair_prefix}_pairs_grouped_behavior.csv")
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -276,8 +278,8 @@ def main() -> None:
 
     digest_df, section_warnings = build_digest(filtered_df)
 
-    csv_path = out_dir / "EURUSD_GBPUSD_first_touch_digest.csv"
-    md_path = out_dir / "EURUSD_GBPUSD_first_touch_digest.md"
+    csv_path = out_dir / f"{pair_prefix}_first_touch_digest.csv"
+    md_path = out_dir / f"{pair_prefix}_first_touch_digest.md"
 
     digest_df.to_csv(csv_path, index=False)
     build_markdown(
