@@ -139,16 +139,24 @@ def _require_columns(df: pd.DataFrame, required: Iterable[str]) -> list[str]:
     return list(required)
 
 
-def _build_grouped_section(df: pd.DataFrame, section: dict) -> pd.DataFrame:
+def _build_grouped_section(df: pd.DataFrame, section: dict) -> tuple[pd.DataFrame, str | None]:
     group_cols = section["groupby"]
     numeric_cols = [c for c in BASE_OUTPUT_COLUMNS + OPTIONAL_COLUMNS if c in df.columns and c != "section"]
+    agg_numeric_cols = [c for c in numeric_cols if c in df.columns and c not in group_cols]
     grouped = df.groupby(group_cols, dropna=False)
-    out = grouped[numeric_cols].mean(numeric_only=True).reset_index()
+    if not agg_numeric_cols:
+        warning = (
+            f"Warning: no numeric aggregation columns available after excluding group keys "
+            f"({', '.join(group_cols)}); section skipped."
+        )
+        return pd.DataFrame(columns=BASE_OUTPUT_COLUMNS + OPTIONAL_COLUMNS), warning
+
+    out = grouped[agg_numeric_cols].mean(numeric_only=True).reset_index()
     for c in group_cols:
         if c not in out.columns:
             out[c] = pd.NA
     out["grouping"] = " + ".join(group_cols)
-    return out
+    return out, None
 
 
 def build_digest(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]]:
@@ -172,7 +180,12 @@ def build_digest(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]]:
 
     for section in SECTION_SPECS:
         sort_metric = section["sort_metric"]
-        part = _build_grouped_section(df, section) if "groupby" in section else df.copy()
+        if "groupby" in section:
+            part, grouped_warning = _build_grouped_section(df, section)
+            if grouped_warning:
+                warnings[section["name"]] = grouped_warning
+        else:
+            part = df.copy()
 
         stability_gap_col = section.get("stable_gap")
         if stability_gap_col:
@@ -185,7 +198,10 @@ def build_digest(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]]:
                 )
 
         part = part[part[sort_metric].notna()].sort_values(by=sort_metric, ascending=False).head(10).copy()
-        part.insert(0, "section", section["name"])
+        if "section" not in part.columns:
+            part.insert(0, "section", section["name"])
+        else:
+            part["section"] = section["name"]
         frames.append(part)
 
     out = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=BASE_OUTPUT_COLUMNS)
