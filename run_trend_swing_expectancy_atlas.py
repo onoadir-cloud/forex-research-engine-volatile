@@ -441,8 +441,16 @@ def summarize(events: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def markdown_report(symbol, tfs, friction, summary, yearly, out_md):
-    def safe_head(df, n=20):
-        return df.head(n).to_markdown(index=False) if not df.empty else "_No rows available._"
+    def safe_table(df, requested_cols, n=20):
+        if df.empty:
+            return "No rows available for this section."
+        safe_cols = [c for c in requested_cols if c in df.columns]
+        if not safe_cols:
+            return "No rows available for this section."
+        trimmed = df[safe_cols].head(n)
+        if trimmed.empty:
+            return "No rows available for this section."
+        return trimmed.to_markdown(index=False)
 
     top_oos = summary.sort_values("OOS_expectancy_from_components", ascending=False) if not summary.empty else pd.DataFrame()
     top_payoff = summary[summary["observations"] >= 200].sort_values("payoff_ratio", ascending=False) if not summary.empty else pd.DataFrame()
@@ -465,6 +473,38 @@ def markdown_report(symbol, tfs, friction, summary, yearly, out_md):
     ses_comp = summary.groupby("session_bucket", dropna=False)[["mean_outcome_after_friction", "OOS_expectancy_from_components", "payoff_ratio"]].mean().reset_index() if not summary.empty else pd.DataFrame()
     fam_comp = summary.groupby("family", dropna=False)[["mean_outcome_after_friction", "OOS_expectancy_from_components", "payoff_ratio"]].mean().reset_index() if not summary.empty else pd.DataFrame()
 
+    interesting_cols = [
+        "family", "timeframe", "lookback_bars", "future_horizon_bars", "direction", "session_bucket", "hour",
+        "observations", "mean_outcome_after_friction", "OOS_expectancy_from_components", "payoff_ratio",
+        "yearly_positive_expectancy_count",
+    ]
+    top_oos_cols = [
+        "family", "timeframe", "lookback_bars", "future_horizon_bars", "direction", "session_bucket", "hour",
+        "observations", "OOS_expectancy_from_components", "mean_outcome_after_friction", "payoff_ratio",
+        "p05_outcome_after_friction", "worst_single_outcome", "yearly_positive_expectancy_count",
+    ]
+    top_payoff_cols = [
+        "family", "timeframe", "lookback_bars", "future_horizon_bars", "direction", "session_bucket", "hour",
+        "observations", "payoff_ratio", "OOS_expectancy_from_components", "mean_outcome_after_friction",
+        "p05_outcome_after_friction", "worst_single_outcome", "yearly_positive_expectancy_count",
+    ]
+    worst_tail_cols = [
+        "family", "timeframe", "lookback_bars", "future_horizon_bars", "direction", "session_bucket", "hour",
+        "observations", "p05_outcome_after_friction", "worst_single_outcome",
+        "OOS_expectancy_from_components", "payoff_ratio", "mean_outcome_after_friction",
+    ]
+    comp_cols = ["timeframe", "session_bucket", "family", "mean_outcome_after_friction", "OOS_expectancy_from_components", "payoff_ratio"]
+
+    os.makedirs(os.path.dirname(out_md) or ".", exist_ok=True)
+    sections = {
+        "interesting": safe_table(interesting, interesting_cols, 20),
+        "top_oos": safe_table(top_oos, top_oos_cols, 20),
+        "top_payoff": safe_table(top_payoff, top_payoff_cols, 20),
+        "worst_tail": safe_table(worst_tail, worst_tail_cols, 20),
+        "tf_comp": safe_table(tf_comp, comp_cols, 20),
+        "ses_comp": safe_table(ses_comp, comp_cols, 20),
+        "fam_comp": safe_table(fam_comp, comp_cols, 20),
+    }
     lines = [
         f"# {symbol} Trend/Swing Expectancy Atlas",
         "",
@@ -487,25 +527,25 @@ def markdown_report(symbol, tfs, friction, summary, yearly, out_md):
         "- Payoff ratio progression is summarized in payoff and family/timeframe tables.",
         "",
         "## Interesting contexts (research-only filters)",
-        safe_head(interesting, 20),
+        sections["interesting"],
         "",
         "## Top 20 contexts by OOS expectancy",
-        safe_head(top_oos, 20),
+        sections["top_oos"],
         "",
         "## Top 20 contexts by payoff ratio (observations >= 200)",
-        safe_head(top_payoff, 20),
+        sections["top_payoff"],
         "",
         "## Worst tail-risk contexts",
-        safe_head(worst_tail, 20),
+        sections["worst_tail"],
         "",
         "## Timeframe comparison",
-        safe_head(tf_comp, 20),
+        sections["tf_comp"],
         "",
         "## Session comparison",
-        safe_head(ses_comp, 20),
+        sections["ses_comp"],
         "",
         "## Family comparison",
-        safe_head(fam_comp, 20),
+        sections["fam_comp"],
         "",
         "## Final interpretation",
         "- Any promising trend leg, breakout, pullback continuation, or directional run context should be taken to locked context deep-check research.",
