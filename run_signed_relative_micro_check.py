@@ -187,8 +187,18 @@ def main() -> None:
         bars_to_first_touch = np.nan
         direction = "not_applicable"
         signed_log_move = np.nan
-        signed_pips_proxy = np.nan
-        signed_after_friction = np.nan
+        deprecated_log_spread_pips_proxy = np.nan
+        deprecated_signed_convergence_after_friction = np.nan
+        touch_abs_z = np.nan
+        current_abs_z = np.nan
+        signed_z_convergence = np.nan
+        favorable_z_convergence = np.nan
+        a_move_pips = np.nan
+        b_move_pips = np.nan
+        basket_move_pips_proxy = np.nan
+        sum_leg_move_pips_proxy = np.nan
+        conservative_behavior_after_friction = np.nan
+        sum_leg_behavior_after_friction = np.nan
 
         if label == "normalized_0_5_first" and norm_i is not None:
             touch_idx = f_start + norm_i
@@ -207,10 +217,32 @@ def main() -> None:
             else:
                 direction = "favorable"
 
-            signed_a = signed_log_move * ca[idx] / 0.0001
-            signed_b = signed_log_move * cb[idx] / 0.0001
-            signed_pips_proxy = min(abs(signed_a), abs(signed_b))
-            signed_after_friction = signed_pips_proxy - ESTIMATED_ROUND_TRIP_FRICTION_PIPS
+            current_abs_z = abs(current_z)
+            touch_z = z[touch_idx]
+            touch_abs_z = abs(touch_z)
+            signed_z_convergence = current_abs_z - touch_abs_z
+            favorable_z_convergence = signed_z_convergence > 0
+
+            pip_size_a = 0.0001
+            pip_size_b = 0.0001
+            a_move_pips = abs(ca[touch_idx] - ca[idx]) / pip_size_a
+            b_move_pips = abs(cb[touch_idx] - cb[idx]) / pip_size_b
+            basket_move_pips_proxy = min(a_move_pips, b_move_pips)
+            sum_leg_move_pips_proxy = a_move_pips + b_move_pips
+            conservative_behavior_after_friction = (
+                basket_move_pips_proxy - ESTIMATED_ROUND_TRIP_FRICTION_PIPS
+            )
+            sum_leg_behavior_after_friction = (
+                sum_leg_move_pips_proxy - ESTIMATED_ROUND_TRIP_FRICTION_PIPS
+            )
+
+            # Deprecated: beta-log spread is not a direct pip/price unit.
+            signed_a = signed_log_move * ca[idx] / pip_size_a
+            signed_b = signed_log_move * cb[idx] / pip_size_b
+            deprecated_log_spread_pips_proxy = min(abs(signed_a), abs(signed_b))
+            deprecated_signed_convergence_after_friction = (
+                deprecated_log_spread_pips_proxy - ESTIMATED_ROUND_TRIP_FRICTION_PIPS
+            )
 
         records.append(
             {
@@ -221,9 +253,19 @@ def main() -> None:
                 "bars_to_first_touch": bars_to_first_touch,
                 "signed_convergence_direction": direction,
                 "signed_convergence_log_move": signed_log_move,
-                "signed_convergence_pips_proxy": signed_pips_proxy,
+                "current_abs_z": current_abs_z,
+                "touch_abs_z": touch_abs_z,
+                "signed_z_convergence": signed_z_convergence,
+                "favorable_z_convergence": favorable_z_convergence,
+                "a_move_pips": a_move_pips,
+                "b_move_pips": b_move_pips,
+                "basket_move_pips_proxy": basket_move_pips_proxy,
+                "sum_leg_move_pips_proxy": sum_leg_move_pips_proxy,
                 "estimated_round_trip_friction_pips": ESTIMATED_ROUND_TRIP_FRICTION_PIPS,
-                "signed_convergence_after_friction": signed_after_friction,
+                "conservative_behavior_after_friction": conservative_behavior_after_friction,
+                "sum_leg_behavior_after_friction": sum_leg_behavior_after_friction,
+                "deprecated_log_spread_pips_proxy": deprecated_log_spread_pips_proxy,
+                "deprecated_signed_convergence_after_friction": deprecated_signed_convergence_after_friction,
             }
         )
 
@@ -243,12 +285,14 @@ def main() -> None:
         "neither_rate": float(neither_mask.mean()) if observations else np.nan,
         "median_bars_to_first_touch": safe_median(norm_events["bars_to_first_touch"]) if not norm_events.empty else np.nan,
         "favorable_signed_convergence_rate": float((norm_events["signed_convergence_direction"] == "favorable").mean()) if not norm_events.empty else np.nan,
-        "median_signed_convergence_pips_proxy": safe_median(norm_events["signed_convergence_pips_proxy"]) if not norm_events.empty else np.nan,
-        "p25_signed_convergence_pips_proxy": float(norm_events["signed_convergence_pips_proxy"].quantile(0.25)) if not norm_events.empty else np.nan,
-        "p75_signed_convergence_pips_proxy": float(norm_events["signed_convergence_pips_proxy"].quantile(0.75)) if not norm_events.empty else np.nan,
-        "p90_signed_convergence_pips_proxy": float(norm_events["signed_convergence_pips_proxy"].quantile(0.90)) if not norm_events.empty else np.nan,
-        "median_signed_convergence_after_friction": safe_median(norm_events["signed_convergence_after_friction"]) if not norm_events.empty else np.nan,
-        "positive_signed_convergence_after_friction_rate": float((norm_events["signed_convergence_after_friction"] > 0).mean()) if not norm_events.empty else np.nan,
+        "favorable_z_convergence_rate": float(norm_events["favorable_z_convergence"].mean()) if not norm_events.empty else np.nan,
+        "median_signed_z_convergence": safe_median(norm_events["signed_z_convergence"]) if not norm_events.empty else np.nan,
+        "median_basket_move_pips_proxy": safe_median(norm_events["basket_move_pips_proxy"]) if not norm_events.empty else np.nan,
+        "median_sum_leg_move_pips_proxy": safe_median(norm_events["sum_leg_move_pips_proxy"]) if not norm_events.empty else np.nan,
+        "median_conservative_behavior_after_friction": safe_median(norm_events["conservative_behavior_after_friction"]) if not norm_events.empty else np.nan,
+        "positive_conservative_after_friction_rate": float((norm_events["conservative_behavior_after_friction"] > 0).mean()) if not norm_events.empty else np.nan,
+        "median_sum_leg_behavior_after_friction": safe_median(norm_events["sum_leg_behavior_after_friction"]) if not norm_events.empty else np.nan,
+        "positive_sum_leg_after_friction_rate": float((norm_events["sum_leg_behavior_after_friction"] > 0).mean()) if not norm_events.empty else np.nan,
     }
 
     split_ix = int(observations * 0.7)
@@ -261,8 +305,11 @@ def main() -> None:
             "split": name,
             "observations": len(part),
             "normalization_0_5_first_rate": float((part["first_touch_0_5_vs_3"] == "normalized_0_5_first").mean()) if not part.empty else np.nan,
-            "median_signed_convergence_after_friction": safe_median(part_norm["signed_convergence_after_friction"]) if not part_norm.empty else np.nan,
-            "positive_signed_convergence_after_friction_rate": float((part_norm["signed_convergence_after_friction"] > 0).mean()) if not part_norm.empty else np.nan,
+            "favorable_signed_convergence_rate": float((part_norm["signed_convergence_direction"] == "favorable").mean()) if not part_norm.empty else np.nan,
+            "favorable_z_convergence_rate": float(part_norm["favorable_z_convergence"].mean()) if not part_norm.empty else np.nan,
+            "median_basket_move_pips_proxy": safe_median(part_norm["basket_move_pips_proxy"]) if not part_norm.empty else np.nan,
+            "median_conservative_behavior_after_friction": safe_median(part_norm["conservative_behavior_after_friction"]) if not part_norm.empty else np.nan,
+            "positive_conservative_after_friction_rate": float((part_norm["conservative_behavior_after_friction"] > 0).mean()) if not part_norm.empty else np.nan,
         }
 
     is_oos = pd.DataFrame([split_row("IS", is_df), split_row("OOS", oos_df)])
@@ -275,8 +322,10 @@ def main() -> None:
                 "year": int(year),
                 "year_observations": len(g),
                 "year_normalization_0_5_first_rate": float((g["first_touch_0_5_vs_3"] == "normalized_0_5_first").mean()),
-                "year_median_signed_convergence_after_friction": safe_median(gn["signed_convergence_after_friction"]) if not gn.empty else np.nan,
-                "year_positive_signed_convergence_after_friction_rate": float((gn["signed_convergence_after_friction"] > 0).mean()) if not gn.empty else np.nan,
+                "year_favorable_z_convergence_rate": float(gn["favorable_z_convergence"].mean()) if not gn.empty else np.nan,
+                "year_median_basket_move_pips_proxy": safe_median(gn["basket_move_pips_proxy"]) if not gn.empty else np.nan,
+                "year_median_conservative_behavior_after_friction": safe_median(gn["conservative_behavior_after_friction"]) if not gn.empty else np.nan,
+                "year_positive_conservative_after_friction_rate": float((gn["conservative_behavior_after_friction"] > 0).mean()) if not gn.empty else np.nan,
             }
         )
     yearly = pd.DataFrame(yearly_rows).sort_values("year") if yearly_rows else pd.DataFrame(
@@ -284,13 +333,15 @@ def main() -> None:
             "year",
             "year_observations",
             "year_normalization_0_5_first_rate",
-            "year_median_signed_convergence_after_friction",
-            "year_positive_signed_convergence_after_friction_rate",
+            "year_favorable_z_convergence_rate",
+            "year_median_basket_move_pips_proxy",
+            "year_median_conservative_behavior_after_friction",
+            "year_positive_conservative_after_friction_rate",
         ]
     )
 
     non_norm = (events["first_touch_0_5_vs_3"] != "normalized_0_5_first").astype(int) if observations else pd.Series(dtype=int)
-    neg_signed = (norm_events["signed_convergence_after_friction"] <= 0).astype(int) if not norm_events.empty else pd.Series(dtype=int)
+    neg_conservative = (norm_events["conservative_behavior_after_friction"] <= 0).astype(int) if not norm_events.empty else pd.Series(dtype=int)
 
     def longest_run(series: pd.Series, value: int = 1) -> int:
         run = best = 0
@@ -304,9 +355,9 @@ def main() -> None:
 
     sequence_stress = {
         "longest_consecutive_non_normalization_first": longest_run(non_norm, 1) if observations else 0,
-        "longest_consecutive_negative_signed_after_friction": longest_run(neg_signed, 1) if not norm_events.empty else 0,
-        "max_rolling_20_negative_signed_rate": float(neg_signed.rolling(20).mean().max()) if len(neg_signed) >= 20 else np.nan,
-        "max_rolling_50_negative_signed_rate": float(neg_signed.rolling(50).mean().max()) if len(neg_signed) >= 50 else np.nan,
+        "longest_consecutive_negative_conservative_after_friction": longest_run(neg_conservative, 1) if not norm_events.empty else 0,
+        "max_rolling_20_negative_conservative_rate": float(neg_conservative.rolling(20).mean().max()) if len(neg_conservative) >= 20 else np.nan,
+        "max_rolling_50_negative_conservative_rate": float(neg_conservative.rolling(50).mean().max()) if len(neg_conservative) >= 50 else np.nan,
     }
 
     events_path = output_dir / f"{args.pair_name}_signed_relative_events.csv"
@@ -324,8 +375,11 @@ def main() -> None:
         "split",
         "IS_OOS_observations",
         "IS_OOS_normalization_0_5_first_rate",
-        "IS_OOS_median_signed_convergence_after_friction",
-        "IS_OOS_positive_signed_convergence_after_friction_rate",
+        "IS_OOS_favorable_signed_convergence_rate",
+        "IS_OOS_favorable_z_convergence_rate",
+        "IS_OOS_median_basket_move_pips_proxy",
+        "IS_OOS_median_conservative_behavior_after_friction",
+        "IS_OOS_positive_conservative_after_friction_rate",
     ]
     summary_wide = summary_df.copy()
     for _, row in prefixed.iterrows():
@@ -348,6 +402,12 @@ def main() -> None:
         f"- abs_zscore_bucket: {FIXED_ABS_ZSCORE_BUCKET}",
         f"- estimated_round_trip_friction_pips: {ESTIMATED_ROUND_TRIP_FRICTION_PIPS:.1f}",
         "",
+        "## Measurement Notes",
+        "- Signed relative movement confirms direction of convergence.",
+        "- Pip feasibility is measured only using actual close-to-close leg movement.",
+        "- Direct beta-log-spread-to-pips conversion is not used for feasibility.",
+        "- Deprecated columns retained for reference only: `deprecated_log_spread_pips_proxy`, `deprecated_signed_convergence_after_friction`.",
+        "",
         "## Overall Summary",
     ]
     for k, v in summary.items():
@@ -360,16 +420,17 @@ def main() -> None:
     seq_df = pd.DataFrame([sequence_stress])
     md_lines.extend(["## Sequence Stress", seq_df.to_markdown(index=False), ""])
 
-    oos_median = is_oos.loc[is_oos["split"] == "OOS", "median_signed_convergence_after_friction"].iloc[0] if not is_oos.empty else np.nan
-    oos_positive = is_oos.loc[is_oos["split"] == "OOS", "positive_signed_convergence_after_friction_rate"].iloc[0] if not is_oos.empty else np.nan
-    seq_fragile = sequence_stress["longest_consecutive_negative_signed_after_friction"] >= 5
+    oos_median = is_oos.loc[is_oos["split"] == "OOS", "median_conservative_behavior_after_friction"].iloc[0] if not is_oos.empty else np.nan
+    oos_positive = is_oos.loc[is_oos["split"] == "OOS", "positive_conservative_after_friction_rate"].iloc[0] if not is_oos.empty else np.nan
+    seq_fragile = sequence_stress["longest_consecutive_negative_conservative_after_friction"] >= 5
 
     md_lines.extend(
         [
             "## Final Interpretation",
-            f"- Signed relative convergence after friction median is {summary['median_signed_convergence_after_friction']}; positive-after-friction rate is {summary['positive_signed_convergence_after_friction_rate']}.",
-            f"- OOS stability reference: OOS median signed convergence after friction is {oos_median}; OOS positive-after-friction rate is {oos_positive}.",
-            f"- Sequence stress fragility flag (heuristic): {seq_fragile} based on longest consecutive negative signed-after-friction sequence.",
+            f"- Signed convergence remains a direction/stability diagnostic: favorable_signed_convergence_rate is {summary['favorable_signed_convergence_rate']} and favorable_z_convergence_rate is {summary['favorable_z_convergence_rate']}.",
+            f"- Feasibility after friction uses close-to-close leg movement: median conservative behavior after friction is {summary['median_conservative_behavior_after_friction']}; positive rate is {summary['positive_conservative_after_friction_rate']}.",
+            f"- OOS stability reference: OOS median conservative behavior after friction is {oos_median}; OOS positive-after-friction rate is {oos_positive}.",
+            f"- Sequence stress fragility flag (heuristic): {seq_fragile} based on longest consecutive negative conservative-after-friction sequence.",
         ]
     )
 
