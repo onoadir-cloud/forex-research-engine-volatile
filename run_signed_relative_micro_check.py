@@ -100,6 +100,33 @@ def first_index_true(mask: np.ndarray) -> Optional[int]:
     return int(idx[0]) if idx.size else None
 
 
+def z_convergence_stats(valid_z: pd.Series) -> dict:
+    sample_count = int(len(valid_z))
+    positive_count = int((valid_z > 0).sum()) if sample_count > 0 else 0
+    non_positive_count = int((valid_z <= 0).sum()) if sample_count > 0 else 0
+    favorable_rate = float((valid_z > 0).mean()) if sample_count > 0 else np.nan
+    median_signed = float(valid_z.median()) if sample_count > 0 else np.nan
+    min_signed = float(valid_z.min()) if sample_count > 0 else np.nan
+    max_signed = float(valid_z.max()) if sample_count > 0 else np.nan
+
+    if sample_count > 0:
+        expected = positive_count / sample_count
+        assert np.isclose(favorable_rate, expected, atol=1e-12), (
+            "favorable_z_convergence_rate mismatch: "
+            f"{favorable_rate} != {expected}"
+        )
+
+    return {
+        "z_convergence_sample_count": sample_count,
+        "z_convergence_positive_count": positive_count,
+        "z_convergence_non_positive_count": non_positive_count,
+        "favorable_z_convergence_rate": favorable_rate,
+        "median_signed_z_convergence": median_signed,
+        "min_signed_z_convergence": min_signed,
+        "max_signed_z_convergence": max_signed,
+    }
+
+
 def main() -> None:
     args = parse_args()
     output_dir = Path(args.output_dir)
@@ -192,7 +219,6 @@ def main() -> None:
         current_abs_z = abs(current_z)
         touch_abs_z = np.nan
         signed_z_convergence = np.nan
-        favorable_z_convergence = np.nan
         a_move_pips = np.nan
         b_move_pips = np.nan
         basket_move_pips_proxy = np.nan
@@ -220,7 +246,6 @@ def main() -> None:
             touch_z = z[touch_idx]
             touch_abs_z = abs(touch_z)
             signed_z_convergence = current_abs_z - touch_abs_z
-            favorable_z_convergence = signed_z_convergence > 0
 
             pip_size_a = 0.0001
             pip_size_b = 0.0001
@@ -255,7 +280,6 @@ def main() -> None:
                 "current_abs_z": current_abs_z,
                 "touch_abs_z": touch_abs_z,
                 "signed_z_convergence": signed_z_convergence,
-                "favorable_z_convergence": favorable_z_convergence,
                 "a_move_pips": a_move_pips,
                 "b_move_pips": b_move_pips,
                 "basket_move_pips_proxy": basket_move_pips_proxy,
@@ -276,6 +300,8 @@ def main() -> None:
     neither_mask = events["first_touch_0_5_vs_3"] == "neither" if observations else pd.Series(dtype=bool)
 
     norm_events = events[normalized_mask].copy() if observations else pd.DataFrame()
+    overall_valid_z = norm_events["signed_z_convergence"].dropna() if not norm_events.empty else pd.Series(dtype=float)
+    overall_z_stats = z_convergence_stats(overall_valid_z)
 
     summary = {
         "observations": observations,
@@ -284,9 +310,7 @@ def main() -> None:
         "neither_rate": float(neither_mask.mean()) if observations else np.nan,
         "median_bars_to_first_touch": safe_median(norm_events["bars_to_first_touch"]) if not norm_events.empty else np.nan,
         "favorable_signed_convergence_rate": float((norm_events["signed_convergence_direction"] == "favorable").mean()) if not norm_events.empty else np.nan,
-        "z_convergence_sample_count": int(norm_events["signed_z_convergence"].notna().sum()) if not norm_events.empty else 0,
-        "favorable_z_convergence_rate": float(norm_events["favorable_z_convergence"].mean(skipna=True)) if not norm_events.empty else np.nan,
-        "median_signed_z_convergence": safe_median(norm_events["signed_z_convergence"].dropna()) if not norm_events.empty else np.nan,
+        **overall_z_stats,
         "median_basket_move_pips_proxy": safe_median(norm_events["basket_move_pips_proxy"]) if not norm_events.empty else np.nan,
         "median_sum_leg_move_pips_proxy": safe_median(norm_events["sum_leg_move_pips_proxy"]) if not norm_events.empty else np.nan,
         "median_conservative_behavior_after_friction": safe_median(norm_events["conservative_behavior_after_friction"]) if not norm_events.empty else np.nan,
@@ -301,14 +325,14 @@ def main() -> None:
 
     def split_row(name: str, part: pd.DataFrame) -> dict:
         part_norm = part[part["first_touch_0_5_vs_3"] == "normalized_0_5_first"] if not part.empty else pd.DataFrame()
+        part_valid_z = part_norm["signed_z_convergence"].dropna() if not part_norm.empty else pd.Series(dtype=float)
+        part_z_stats = z_convergence_stats(part_valid_z)
         return {
             "split": name,
             "observations": len(part),
             "normalization_0_5_first_rate": float((part["first_touch_0_5_vs_3"] == "normalized_0_5_first").mean()) if not part.empty else np.nan,
             "favorable_signed_convergence_rate": float((part_norm["signed_convergence_direction"] == "favorable").mean()) if not part_norm.empty else np.nan,
-            "favorable_z_convergence_rate": float(part_norm["favorable_z_convergence"].mean(skipna=True)) if not part_norm.empty else np.nan,
-            "median_signed_z_convergence": safe_median(part_norm["signed_z_convergence"].dropna()) if not part_norm.empty else np.nan,
-            "z_convergence_sample_count": int(part_norm["signed_z_convergence"].notna().sum()) if not part_norm.empty else 0,
+            **part_z_stats,
             "median_basket_move_pips_proxy": safe_median(part_norm["basket_move_pips_proxy"]) if not part_norm.empty else np.nan,
             "median_conservative_behavior_after_friction": safe_median(part_norm["conservative_behavior_after_friction"]) if not part_norm.empty else np.nan,
             "positive_conservative_after_friction_rate": float((part_norm["conservative_behavior_after_friction"] > 0).mean()) if not part_norm.empty else np.nan,
@@ -319,14 +343,20 @@ def main() -> None:
     yearly_rows = []
     for year, g in events.groupby("year"):
         gn = g[g["first_touch_0_5_vs_3"] == "normalized_0_5_first"]
+        year_valid_z = gn["signed_z_convergence"].dropna() if not gn.empty else pd.Series(dtype=float)
+        year_z_stats = z_convergence_stats(year_valid_z)
         yearly_rows.append(
             {
                 "year": int(year),
                 "year_observations": len(g),
                 "year_normalization_0_5_first_rate": float((g["first_touch_0_5_vs_3"] == "normalized_0_5_first").mean()),
-                "year_favorable_z_convergence_rate": float(gn["favorable_z_convergence"].mean(skipna=True)) if not gn.empty else np.nan,
-                "year_median_signed_z_convergence": safe_median(gn["signed_z_convergence"].dropna()) if not gn.empty else np.nan,
-                "year_z_convergence_sample_count": int(gn["signed_z_convergence"].notna().sum()) if not gn.empty else 0,
+                "year_favorable_z_convergence_rate": year_z_stats["favorable_z_convergence_rate"],
+                "year_median_signed_z_convergence": year_z_stats["median_signed_z_convergence"],
+                "year_z_convergence_sample_count": year_z_stats["z_convergence_sample_count"],
+                "year_z_convergence_positive_count": year_z_stats["z_convergence_positive_count"],
+                "year_z_convergence_non_positive_count": year_z_stats["z_convergence_non_positive_count"],
+                "year_min_signed_z_convergence": year_z_stats["min_signed_z_convergence"],
+                "year_max_signed_z_convergence": year_z_stats["max_signed_z_convergence"],
                 "year_median_basket_move_pips_proxy": safe_median(gn["basket_move_pips_proxy"]) if not gn.empty else np.nan,
                 "year_median_conservative_behavior_after_friction": safe_median(gn["conservative_behavior_after_friction"]) if not gn.empty else np.nan,
                 "year_positive_conservative_after_friction_rate": float((gn["conservative_behavior_after_friction"] > 0).mean()) if not gn.empty else np.nan,
@@ -340,6 +370,10 @@ def main() -> None:
             "year_favorable_z_convergence_rate",
             "year_median_signed_z_convergence",
             "year_z_convergence_sample_count",
+            "year_z_convergence_positive_count",
+            "year_z_convergence_non_positive_count",
+            "year_min_signed_z_convergence",
+            "year_max_signed_z_convergence",
             "year_median_basket_move_pips_proxy",
             "year_median_conservative_behavior_after_friction",
             "year_positive_conservative_after_friction_rate",
@@ -385,6 +419,10 @@ def main() -> None:
         "IS_OOS_favorable_z_convergence_rate",
         "IS_OOS_median_signed_z_convergence",
         "IS_OOS_z_convergence_sample_count",
+        "IS_OOS_z_convergence_positive_count",
+        "IS_OOS_z_convergence_non_positive_count",
+        "IS_OOS_min_signed_z_convergence",
+        "IS_OOS_max_signed_z_convergence",
         "IS_OOS_median_basket_move_pips_proxy",
         "IS_OOS_median_conservative_behavior_after_friction",
         "IS_OOS_positive_conservative_after_friction_rate",
