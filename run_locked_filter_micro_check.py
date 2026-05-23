@@ -16,7 +16,7 @@ OUTPUT_EVENTS = OUTPUT_DIR / "EURUSD_GBPUSD_locked_filter_events.csv"
 OUTPUT_SUMMARY_CSV = OUTPUT_DIR / "EURUSD_GBPUSD_locked_filter_summary.csv"
 OUTPUT_SUMMARY_MD = OUTPUT_DIR / "EURUSD_GBPUSD_locked_filter_summary.md"
 
-REQUIRED_COLUMNS = [
+REQUIRED_RAW_COLUMNS = [
     "datetime",
     "year",
     "current_z",
@@ -27,7 +27,6 @@ REQUIRED_COLUMNS = [
     "estimated_round_trip_friction_pips",
     "conservative_behavior_after_friction",
     "sum_leg_behavior_after_friction",
-    "hour",
 ]
 
 
@@ -139,12 +138,22 @@ def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     df = pd.read_csv(INPUT_PATH)
-    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+    missing = [c for c in REQUIRED_RAW_COLUMNS if c not in df.columns and c != "year"]
     if missing:
         raise ValueError(f"Input is missing required columns: {missing}")
 
-    df = df[REQUIRED_COLUMNS].copy()
+    selected_columns = [c for c in REQUIRED_RAW_COLUMNS if c in df.columns]
+    df = df[selected_columns].copy()
     df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
+    if "hour" not in df.columns:
+        df["hour"] = df["datetime"].dt.hour
+    if "year" not in df.columns:
+        df["year"] = df["datetime"].dt.year
+    if "current_abs_z" not in df.columns:
+        df["current_abs_z"] = df["current_z"].abs()
+    if "z_sign" not in df.columns:
+        df["z_sign"] = np.where(df["current_z"] > 0, "positive_z", "negative_z")
+
     numeric_cols = [
         "year",
         "current_z",
@@ -158,6 +167,8 @@ def main() -> None:
     ]
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce")
+    if df["year"].isna().any():
+        df.loc[df["year"].isna(), "year"] = df.loc[df["year"].isna(), "datetime"].dt.year
 
     df = df.dropna(
         subset=[
@@ -172,8 +183,10 @@ def main() -> None:
         ]
     ).copy()
 
-    df["current_abs_z"] = df["current_z"].abs()
-    df["z_sign"] = np.where(df["current_z"] > 0, "positive_z", "negative_z")
+    if "current_abs_z" not in df.columns:
+        df["current_abs_z"] = df["current_z"].abs()
+    if "z_sign" not in df.columns:
+        df["z_sign"] = np.where(df["current_z"] > 0, "positive_z", "negative_z")
     df["after_friction_label"] = np.where(
         df["conservative_behavior_after_friction"] > 0,
         "positive_after_friction",
@@ -188,6 +201,36 @@ def main() -> None:
     ].copy()
 
     locked = locked.sort_values("datetime").reset_index(drop=True)
+    if locked.empty:
+        locked.to_csv(OUTPUT_EVENTS, index=False)
+        pd.DataFrame(
+            columns=[
+                "section",
+                "metric",
+                "value",
+            ]
+        ).to_csv(OUTPUT_SUMMARY_CSV, index=False)
+        OUTPUT_SUMMARY_MD.write_text(
+            "\n".join(
+                [
+                    "# EURUSD/GBPUSD Locked Filter Micro Check",
+                    "",
+                    "**Warning:** descriptive locked-filter diagnostics only, not trading guidance.",
+                    "",
+                    "## Locked Filter Definition",
+                    "- first_touch_0_5_vs_3 == `normalized_0_5_first`",
+                    "- hour == 15",
+                    "- current_abs_z >= 1.8",
+                    "- abs(current_z) < 2.0",
+                    "",
+                    "## Result",
+                    "No rows matched the locked filter; outputs were written with headers only.",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return
+
     locked["year"] = locked["year"].astype(int)
     locked["month"] = locked["datetime"].dt.month.astype(int)
 
