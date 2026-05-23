@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, List, Tuple
 
 import pandas as pd
 
@@ -36,6 +36,41 @@ FAMILIES: List[Tuple[str, str]] = [
         "(moved_further_to_3_first_vs_0_5_rate >= @d1 and abs(IS_moved_further_to_3_first_vs_0_5_rate - OOS_moved_further_to_3_first_vs_0_5_rate) <= @st and observations >= @min_obs)",
     ),
 ]
+
+
+
+CONTEXT_COLUMNS = [
+    "window",
+    "horizon_bars",
+    "grouping",
+    "session_bucket",
+    "hour",
+    "correlation_regime",
+    "beta_stability",
+    "zscore_bucket",
+    "abs_zscore_bucket",
+]
+
+VALID_WINDOWS = {20, 50, 100}
+VALID_HORIZONS = {5, 10, 20, 40}
+
+FAMILY_SORT_RULES: Dict[str, List[str]] = {
+    "Normalization-first relative behavior": ["normalized_0_5_first_vs_3_rate", "observations"],
+    "Strong normalization-to-zero behavior": ["normalized_0_first_vs_3_rate", "observations"],
+    "Extreme divergence-first behavior": ["moved_further_to_3_first_vs_0_5_rate", "observations"],
+    "Severe divergence-first to abs z 4": ["moved_further_to_4_first_vs_0_5_rate", "observations"],
+    "Stable normalization-first behavior": [
+        "normalized_0_5_first_vs_3_rate",
+        "stability_gap",
+        "observations",
+    ],
+    "Stable divergence-first behavior": [
+        "moved_further_to_3_first_vs_0_5_rate",
+        "stability_gap",
+        "observations",
+    ],
+}
+
 
 REQUIRED_COLUMNS = {
     "window",
@@ -108,14 +143,52 @@ def context_string(row: pd.Series) -> str:
     )
 
 
-def top_contexts(family_df: pd.DataFrame, n: int = 5) -> List[str]:
+def _validate_context_values(df_contexts: pd.DataFrame, family_name: str) -> None:
+    non_null_windows = df_contexts["window"].dropna()
+    invalid_windows = sorted({int(v) for v in non_null_windows if int(v) not in VALID_WINDOWS})
+    if invalid_windows:
+        raise ValueError(
+            f"Invalid window values in top contexts for '{family_name}': {invalid_windows}. "
+            f"Allowed: {sorted(VALID_WINDOWS)}"
+        )
+
+    non_null_horizons = df_contexts["horizon_bars"].dropna()
+    invalid_horizons = sorted({int(v) for v in non_null_horizons if int(v) not in VALID_HORIZONS})
+    if invalid_horizons:
+        raise ValueError(
+            f"Invalid horizon_bars values in top contexts for '{family_name}': {invalid_horizons}. "
+            f"Allowed: {sorted(VALID_HORIZONS)}"
+        )
+
+
+def top_context_rows(family_name: str, family_df: pd.DataFrame, n: int = 5) -> pd.DataFrame:
     if family_df.empty:
-        return []
-    scored = family_df.sort_values(
-        by=["observations", "normalized_0_5_first_vs_3_rate", "moved_further_to_3_first_vs_0_5_rate"],
-        ascending=[False, False, False],
-    ).head(n)
-    return [context_string(r) for _, r in scored.iterrows()]
+        return family_df.head(0)
+
+    unique_contexts = family_df.drop_duplicates(subset=CONTEXT_COLUMNS, keep="first").copy()
+
+    sort_by = FAMILY_SORT_RULES[family_name]
+    ascending = [False if col != "stability_gap" else True for col in sort_by]
+
+    if "stability_gap" in sort_by:
+        unique_contexts["stability_gap"] = (
+            unique_contexts["IS_normalized_0_5_first_vs_3_rate"]
+            - unique_contexts["OOS_normalized_0_5_first_vs_3_rate"]
+        ).abs()
+        if "moved_further_to_3_first_vs_0_5_rate" in sort_by:
+            unique_contexts["stability_gap"] = (
+                unique_contexts["IS_moved_further_to_3_first_vs_0_5_rate"]
+                - unique_contexts["OOS_moved_further_to_3_first_vs_0_5_rate"]
+            ).abs()
+
+    top_rows = unique_contexts.sort_values(by=sort_by, ascending=ascending).head(n)
+    _validate_context_values(top_rows, family_name)
+    return top_rows
+
+
+def top_contexts(family_name: str, family_df: pd.DataFrame, n: int = 5) -> List[str]:
+    top_rows = top_context_rows(family_name, family_df, n=n)
+    return [context_string(r) for _, r in top_rows.iterrows()]
 
 
 def summarize_family(name: str, family_df: pd.DataFrame) -> Dict[str, object]:
@@ -142,7 +215,7 @@ def summarize_family(name: str, family_df: pd.DataFrame) -> Dict[str, object]:
 
     window_counts = family_df.groupby("window")["observations"].sum().sort_values(ascending=False)
     horizon_counts = family_df.groupby("horizon_bars")["observations"].sum().sort_values(ascending=False)
-    contexts = top_contexts(family_df, n=5)
+    contexts = top_contexts(name, family_df, n=5)
 
     return {
         "family_name": name,
@@ -184,7 +257,7 @@ def build_markdown(source_path: Path, source_rows: int, family_frames: Dict[str,
     for family_name, df_family in family_frames.items():
         lines.append(f"## {family_name}")
         lines.append(f"Rows in family: **{len(df_family)}**")
-        contexts = top_contexts(df_family, n=5)
+        contexts = top_contexts(family_name, df_family, n=5)
         if contexts:
             lines.append("Top 5 contexts:")
             for idx, ctx in enumerate(contexts, start=1):
