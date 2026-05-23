@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Callable
+import argparse
 
 import numpy as np
 import pandas as pd
@@ -155,6 +156,14 @@ def _subset_metrics(subset_name: str, sdf: pd.DataFrame) -> dict:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output_dir", default=str(OUTPUT_DIR))
+    args = parser.parse_args()
+
+    output_dir = Path(args.output_dir)
+    output_csv = output_dir / OUTPUT_CSV.name
+    output_md = output_dir / OUTPUT_MD.name
+
     if not INPUT_PATH.exists():
         raise FileNotFoundError(f"Input file not found: {INPUT_PATH}")
 
@@ -190,7 +199,9 @@ def main() -> None:
             )
 
     diagnostics_df = pd.DataFrame(subset_rows)
-    diagnostics_df.to_csv(OUTPUT_CSV, index=False)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    diagnostics_df.to_csv(output_csv, index=False)
 
     yearly_df = pd.DataFrame(yearly_rows).sort_values(["subset_name", "year"])
 
@@ -223,8 +234,6 @@ def main() -> None:
         "max_rolling_20_negative_after_friction_rate",
         "max_rolling_50_negative_after_friction_rate",
     ]
-
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     lines: list[str] = []
     lines.append("# EURUSD/GBPUSD Ex-Ante Filter Diagnostics")
@@ -263,10 +272,10 @@ def main() -> None:
         "- If OOS deterioration and sequence stress remain elevated, interpret this as persistent fragility despite event-time filtering."
     )
 
-    OUTPUT_MD.write_text("\n".join(lines), encoding="utf-8")
+    output_md.write_text("\n".join(lines), encoding="utf-8")
 
-    print(f"Wrote: {OUTPUT_CSV}")
-    print(f"Wrote: {OUTPUT_MD}")
+    print(f"Wrote: {output_csv}")
+    print(f"Wrote: {output_md}")
 
 
 if __name__ == "__main__":
