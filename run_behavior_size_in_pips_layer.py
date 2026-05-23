@@ -190,33 +190,57 @@ def main() -> None:
             for horizon in HORIZONS:
                 print(f"[progress] pair={pair_name} window={window} horizon={horizon}")
                 z_future = build_future_arrays(work["spread_zscore"], horizon)
+                close_a_future = build_future_arrays(work["close_a"], horizon)
+                close_b_future = build_future_arrays(work["close_b"], horizon)
                 valid = (~work["spread_zscore"].isna()) & (~work["spread_std"].isna()) & (~pd.isna(z_future).all(axis=1))
                 if not valid.any():
                     continue
 
                 labels_05_3, bars_05_3 = first_touch_labels(z_future, work["spread_zscore"].to_numpy(), 0.5, 3.0)
-                labels_0_3, _ = first_touch_labels(z_future, work["spread_zscore"].to_numpy(), 0.0, 3.0)
-                labels_05_4, _ = first_touch_labels(z_future, work["spread_zscore"].to_numpy(), 0.5, 4.0)
+                labels_0_3, bars_0_3 = first_touch_labels(z_future, work["spread_zscore"].to_numpy(), 0.0, 3.0)
+                labels_05_4, bars_05_4 = first_touch_labels(z_future, work["spread_zscore"].to_numpy(), 0.5, 4.0)
 
                 temp = work.loc[valid].copy()
                 idx = valid.to_numpy()
                 temp["horizon_bars"] = horizon
-                temp["normalization_0_5_first_vs_3"] = (labels_05_3[idx] == "normalization_0_5_first").astype(float)
-                temp["moved_further_to_3_first_vs_0_5"] = (labels_05_3[idx] == "moved_further_to_3_first").astype(float)
-                temp["normalization_0_first_vs_3"] = (labels_0_3[idx] == "normalization_0_0_first").astype(float)
-                temp["moved_further_to_3_first_vs_0"] = (labels_0_3[idx] == "moved_further_to_3_first").astype(float)
+                eligible_05 = temp["current_abs_z"] > 0.5
+                eligible_0 = temp["current_abs_z"] > 0.0
+                temp["normalization_0_5_first_vs_3"] = np.where(eligible_05, (labels_05_3[idx] == "normalization_0_5_first").astype(float), np.nan)
+                temp["moved_further_to_3_first_vs_0_5"] = np.where(eligible_05, (labels_05_3[idx] == "moved_further_to_3_first").astype(float), np.nan)
+                temp["normalization_0_first_vs_3"] = np.where(eligible_0, (labels_0_3[idx] == "normalization_0_0_first").astype(float), np.nan)
+                temp["moved_further_to_3_first_vs_0"] = np.where(eligible_0, (labels_0_3[idx] == "moved_further_to_3_first").astype(float), np.nan)
                 temp["normalization_0_5_first_vs_4"] = (labels_05_4[idx] == "normalization_0_5_first").astype(float)
                 temp["moved_further_to_4_first_vs_0_5"] = (labels_05_4[idx] == "moved_further_to_4_first").astype(float)
                 temp["bars_to_first_touch_0_5_vs_3"] = bars_05_3[idx]
+                temp["bars_to_first_touch_0_vs_3"] = bars_0_3[idx]
+                temp["bars_to_first_touch_0_5_vs_4"] = bars_05_4[idx]
 
-                z_dist_05 = (temp["current_abs_z"] - 0.5).clip(lower=0.0)
-                log_move_05 = z_dist_05 * temp["spread_std"]
-                beta_abs = temp["rolling_beta"].abs().clip(lower=0.01)
                 pipa = pip_size(symbol_a)
                 pipb = pip_size(symbol_b)
-                approx_a = (log_move_05.abs() * temp["close_a"] / pipa).abs()
-                approx_b = ((log_move_05 / beta_abs).abs() * temp["close_b"] / pipb).abs()
-                temp["behavior_size_pips_proxy"] = np.minimum(approx_a, approx_b)
+
+                temp["a_move_pips_to_first_touch"] = np.nan
+                temp["b_move_pips_to_first_touch"] = np.nan
+                temp["basket_move_pips_proxy"] = np.nan
+                temp["sum_leg_move_pips_proxy"] = np.nan
+
+                norm_mask_05_3 = (labels_05_3[idx] == "normalization_0_5_first") & (temp["current_abs_z"] > 0.5)
+                if norm_mask_05_3.any():
+                    future_step = temp.loc[norm_mask_05_3, "bars_to_first_touch_0_5_vs_3"].astype("Int64")
+                    base_close_a = temp.loc[norm_mask_05_3, "close_a"].to_numpy()
+                    base_close_b = temp.loc[norm_mask_05_3, "close_b"].to_numpy()
+                    row_positions = np.where(idx)[0][norm_mask_05_3.to_numpy()]
+                    future_close_a = np.array([close_a_future[i_row, int(step - 1)] for i_row, step in zip(row_positions, future_step.to_numpy())], dtype=float)
+                    future_close_b = np.array([close_b_future[i_row, int(step - 1)] for i_row, step in zip(row_positions, future_step.to_numpy())], dtype=float)
+                    a_move = np.abs(future_close_a - base_close_a) / pipa
+                    b_move = np.abs(future_close_b - base_close_b) / pipb
+                    basket_move = np.minimum(a_move, b_move)
+                    sum_move = a_move + b_move
+                    temp.loc[norm_mask_05_3, "a_move_pips_to_first_touch"] = a_move
+                    temp.loc[norm_mask_05_3, "b_move_pips_to_first_touch"] = b_move
+                    temp.loc[norm_mask_05_3, "basket_move_pips_proxy"] = basket_move
+                    temp.loc[norm_mask_05_3, "sum_leg_move_pips_proxy"] = sum_move
+
+                temp["behavior_size_pips_proxy"] = temp["basket_move_pips_proxy"]
 
                 all_rows.append(temp)
 
@@ -225,6 +249,15 @@ def main() -> None:
 
     full = pd.concat(all_rows, ignore_index=True)
     keys = ["pair_name", "window", "horizon_bars", "session_bucket", "hour", "abs_zscore_bucket"]
+    valid_size = full["behavior_size_pips_proxy"].where((full["behavior_size_pips_proxy"] > 0) & (~full["behavior_size_pips_proxy"].isna()))
+    valid_a_move = full["a_move_pips_to_first_touch"].where((full["a_move_pips_to_first_touch"] > 0) & (~full["a_move_pips_to_first_touch"].isna()))
+    valid_b_move = full["b_move_pips_to_first_touch"].where((full["b_move_pips_to_first_touch"] > 0) & (~full["b_move_pips_to_first_touch"].isna()))
+    valid_sum_move = full["sum_leg_move_pips_proxy"].where((full["sum_leg_move_pips_proxy"] > 0) & (~full["sum_leg_move_pips_proxy"].isna()))
+    full["behavior_size_pips_proxy_valid"] = valid_size
+    full["a_move_pips_valid"] = valid_a_move
+    full["b_move_pips_valid"] = valid_b_move
+    full["sum_leg_move_pips_proxy_valid"] = valid_sum_move
+
     summary = full.groupby(keys, dropna=False).agg(
         observations=("spread_zscore", "size"),
         normalization_0_5_first_vs_3_rate=("normalization_0_5_first_vs_3", "mean"),
@@ -234,10 +267,13 @@ def main() -> None:
         normalization_0_5_first_vs_4_rate=("normalization_0_5_first_vs_4", "mean"),
         moved_further_to_4_first_vs_0_5_rate=("moved_further_to_4_first_vs_0_5", "mean"),
         median_bars_to_first_touch_0_5_vs_3=("bars_to_first_touch_0_5_vs_3", "median"),
-        behavior_size_pips_proxy_median=("behavior_size_pips_proxy", "median"),
-        behavior_size_pips_proxy_p25=("behavior_size_pips_proxy", lambda s: np.nanpercentile(s, 25)),
-        behavior_size_pips_proxy_p75=("behavior_size_pips_proxy", lambda s: np.nanpercentile(s, 75)),
-        behavior_size_pips_proxy_p90=("behavior_size_pips_proxy", lambda s: np.nanpercentile(s, 90)),
+        behavior_size_pips_proxy_median=("behavior_size_pips_proxy_valid", "median"),
+        behavior_size_pips_proxy_p25=("behavior_size_pips_proxy_valid", lambda s: np.nanpercentile(s.dropna(), 25) if s.notna().any() else np.nan),
+        behavior_size_pips_proxy_p75=("behavior_size_pips_proxy_valid", lambda s: np.nanpercentile(s.dropna(), 75) if s.notna().any() else np.nan),
+        behavior_size_pips_proxy_p90=("behavior_size_pips_proxy_valid", lambda s: np.nanpercentile(s.dropna(), 90) if s.notna().any() else np.nan),
+        a_move_pips_median=("a_move_pips_valid", "median"),
+        b_move_pips_median=("b_move_pips_valid", "median"),
+        sum_leg_move_pips_proxy_median=("sum_leg_move_pips_proxy_valid", "median"),
     ).reset_index()
 
     summary = summary[summary["observations"] >= args.min_observations].copy()
@@ -251,7 +287,11 @@ def main() -> None:
         friction_vals.append(round_trip_friction(cfg))
     summary["estimated_round_trip_friction_pips"] = friction_vals
     summary["cost_share_of_median_behavior"] = summary["estimated_round_trip_friction_pips"] / summary["behavior_size_pips_proxy_median"].clip(lower=0.01)
-    summary["feasibility_band"] = summary["cost_share_of_median_behavior"].apply(feasibility_band)
+    summary["feasibility_band"] = np.where(
+        summary["behavior_size_pips_proxy_median"].isna(),
+        "insufficient_size_data",
+        summary["cost_share_of_median_behavior"].apply(feasibility_band),
+    )
 
     csv_out = out_dir / "behavior_size_in_pips_summary.csv"
     summary.to_csv(csv_out, index=False)
@@ -302,9 +342,15 @@ def main() -> None:
     lines.append("")
 
     lines.append("## Notes")
-    lines.append("- behavior_size_pips_proxy is an approximate one-leg equivalent proxy based on relative spread movement.")
-    lines.append("- True execution analysis needs broker spread series and environment-specific friction modeling.")
-    lines.append("- z-score movement behavior must not be interpreted as profitability.")
+    lines.append("- behavior size is measured from actual current close to first-touch close (normalization-first events only).")
+    lines.append("- This remains descriptive feasibility screening and is not profitability.")
+    lines.append("- This still ignores live spread series and broker execution.")
+
+    if (summary["behavior_size_pips_proxy_median"] > 500).any():
+        lines.append('- Large movement proxy detected; inspect pair/time context.')
+    missing_size_ratio = summary["behavior_size_pips_proxy_median"].isna().mean() if len(summary) else 0.0
+    if missing_size_ratio > 0.25:
+        lines.append(f"- Warning: many contexts have missing size data ({missing_size_ratio:.1%}).")
 
     md_out.write_text("\n".join(lines), encoding="utf-8")
     print(f"[done] wrote {csv_out}")
