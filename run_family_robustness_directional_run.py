@@ -193,12 +193,23 @@ def build_verdict(events: pd.DataFrame, method_df: pd.DataFrame, symbol_df: pd.D
             and pos_years_opp >= 0.60
         )
 
-        verdict = "PASS" if pass_cond else "FAIL"
-        reason = (
-            "OOS beats random+opposite with multi-symbol and year stability"
-            if pass_cond
-            else "Random/opposite not beaten robustly in OOS, or concentrated by symbol/year"
+        weak_positive = (
+            pd.notna(oos_edge_rand)
+            and pd.notna(oos_edge_opp)
+            and oos_edge_rand > 0
+            and oos_edge_opp > 0
+            and (oos_symbols < 4 or sy["symbol"].nunique() < 4 or pos_years_rand < 0.60 or pos_years_opp < 0.60)
         )
+
+        if pass_cond:
+            verdict = "PASS"
+            reason = "OOS beats random+opposite with multi-symbol and year stability"
+        elif weak_positive:
+            verdict = "WARN"
+            reason = "OOS positive but weak/unstable or concentrated by symbol/year"
+        else:
+            verdict = "FAIL"
+            reason = "Random/opposite similar or better in OOS, or edge exists only in narrow slices"
 
         rows.append(
             {
