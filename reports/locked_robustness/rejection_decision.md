@@ -1,20 +1,21 @@
 # Locked Robustness Rejection Decision
 
-All locked candidates failed the robustness gate and are rejected.
+## Executive Summary
+All locked candidates failed robustness validation and are rejected.
 
-## Runtime Verdict
+## Locked Candidate Results
 - `A_H1_momentum50_h20` = **FAIL**
 - `A_H1_momentum50_h40` = **FAIL**
 - `A_H1_momentum50_h80` = **FAIL**
 - `B_H4_mapos50_h80` = **FAIL**
 
-## Decision Rationale
-1. Every locked candidate failed, so none qualify for progression.
-2. Candidate A showed instability across years and did not consistently outperform random baselines.
-3. Candidate B failed due to insufficient OOS/yearly stability, with weakness especially versus random baselines.
-4. The previously strong top-context signal is likely descriptive/overfit rather than robust under locked testing.
+## Assessment
+- **Candidate A** was unstable across years and did not consistently beat random baselines.
+- **Candidate B** showed strong descriptive expectancy in some periods, but failed robustness because it did not consistently beat random/opposite baselines, especially in OOS stability.
+- The prior top-context strength is therefore more likely descriptive/overfit than robust enough for trading deployment.
 
-## Final Recommendation
+## Final Decision
 Reject these locked candidates.
 
-Do **not** proceed to trade simulation, EA building, or further optimization for this set.
+Do **not** proceed to trade simulation.
+Do **not** build an EA from these candidates.
