@@ -44,6 +44,16 @@ DATASETS = [
     ("EURJPY", "data/EURJPY_M15_MT5_5Y.csv"),
 ]
 
+OUTPUT_FILES = [
+    "family_events.csv",
+    "family_by_method.csv",
+    "family_by_symbol.csv",
+    "family_by_year.csv",
+    "family_walkforward.csv",
+    "family_verdict.csv",
+    "family_robustness_summary.md",
+]
+
 
 def build_events_for_symbol(symbol: str, csv_path: str, atr_period: int, cost_profile: str) -> pd.DataFrame:
     base = normalize_ohlc(pd.read_csv(csv_path))
@@ -238,6 +248,11 @@ def main() -> None:
 
     os.makedirs(args.output_dir, exist_ok=True)
 
+    missing = [path for _, path in DATASETS if not os.path.exists(path)]
+    if missing:
+        missing_text = ", ".join(missing)
+        raise FileNotFoundError(f"Missing required dataset(s): {missing_text}")
+
     events_all = []
     for symbol, path in DATASETS:
         events_all.append(build_events_for_symbol(symbol, path, args.atr_period, args.cost_profile))
@@ -249,14 +264,14 @@ def main() -> None:
     wf = walkforward(events)
     verdict = build_verdict(events, by_method, by_symbol, by_year, wf)
 
-    events.to_csv(os.path.join(args.output_dir, "family_events.csv"), index=False)
-    by_method.to_csv(os.path.join(args.output_dir, "family_by_method.csv"), index=False)
-    by_symbol.to_csv(os.path.join(args.output_dir, "family_by_symbol.csv"), index=False)
-    by_year.to_csv(os.path.join(args.output_dir, "family_by_year.csv"), index=False)
-    wf.to_csv(os.path.join(args.output_dir, "family_walkforward.csv"), index=False)
-    verdict.to_csv(os.path.join(args.output_dir, "family_verdict.csv"), index=False)
+    events.to_csv(os.path.join(args.output_dir, OUTPUT_FILES[0]), index=False)
+    by_method.to_csv(os.path.join(args.output_dir, OUTPUT_FILES[1]), index=False)
+    by_symbol.to_csv(os.path.join(args.output_dir, OUTPUT_FILES[2]), index=False)
+    by_year.to_csv(os.path.join(args.output_dir, OUTPUT_FILES[3]), index=False)
+    wf.to_csv(os.path.join(args.output_dir, OUTPUT_FILES[4]), index=False)
+    verdict.to_csv(os.path.join(args.output_dir, OUTPUT_FILES[5]), index=False)
 
-    md = os.path.join(args.output_dir, "family_robustness_summary.md")
+    md = os.path.join(args.output_dir, OUTPUT_FILES[6])
     with open(md, "w", encoding="utf-8") as f:
         f.write("# Family Robustness Directional-Run Summary\n\n")
         f.write("Research-only study. No EA, no live trading, no optimization, no top-context search.\n\n")
