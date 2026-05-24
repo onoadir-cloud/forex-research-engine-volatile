@@ -441,6 +441,11 @@ def summarize(events: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def markdown_report(symbol, tfs, friction, summary, yearly, out_md):
+    def ensure_col(df, col, default=0):
+        if col not in df.columns:
+            df[col] = default
+        return df
+
     def safe_table(df, requested_cols, n=20):
         if df.empty:
             return "No rows available for this section."
@@ -465,6 +470,7 @@ def markdown_report(symbol, tfs, friction, summary, yearly, out_md):
     interesting = summary.copy()
     if not interesting.empty:
         interesting = interesting.merge(yr_pos, on=["family", "timeframe", "lookback_bars", "future_horizon_bars", "direction"], how="left")
+        interesting = ensure_col(interesting, "yearly_positive_expectancy_count", 0)
         interesting["yearly_positive_expectancy_count"] = interesting["yearly_positive_expectancy_count"].fillna(0)
         enough_years = interesting["yearly_positive_expectancy_count"] >= 3
         interesting = interesting[(interesting["observations"] >= 200) & (interesting["OOS_expectancy_from_components"] > 0) & (interesting["mean_outcome_after_friction"] > 0) & (interesting["payoff_ratio"] > 1.2) & (enough_years | (interesting["observations"] < 3))]
