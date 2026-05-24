@@ -29,6 +29,8 @@ def test_family_script_scope_and_constraints():
     assert '"family_verdict.csv"' in text
     assert '"family_robustness_summary.md"' in text
     assert '"random_baseline_deterministic"' in text
+    assert "OUTPUT_FILES = [" in text
+    assert "Missing required dataset(s):" in text
 
 
 def test_family_script_cli_help():
