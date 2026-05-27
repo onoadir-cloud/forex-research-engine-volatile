@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 import numpy as np
@@ -40,6 +41,51 @@ def load_symbols(config_path: Path) -> list[str]:
         raise ValueError("symbols_config.json must contain non-empty 'symbols' list")
     return [str(s) for s in symbols]
 
+
+
+
+def infer_symbol_from_filename(filename: str) -> str | None:
+    stem = Path(filename).stem
+    m = re.match(r"^(?P<symbol>[A-Za-z]{6,10})(?:[_-].*)?$", stem)
+    if m:
+        return m.group("symbol").upper()
+    return None
+
+
+def discover_symbol_csv_files(data_dir: Path, configured_symbols: list[str]) -> dict[str, Path]:
+    csv_files = sorted(data_dir.glob("*.csv"))
+    print(f"[info] scanning data folder: {data_dir}")
+    if csv_files:
+        print("[info] discovered CSV files:")
+        for csv_file in csv_files:
+            print(f"  - {csv_file}")
+    else:
+        raise FileNotFoundError(
+            f"No CSV files found in '{data_dir}'. Expected symbol files such as "
+            "'EURUSD_M15_MT5_5Y.csv' or 'EURUSD_M15.csv'."
+        )
+
+    configured_set = {s.upper() for s in configured_symbols}
+    matches: dict[str, Path] = {}
+
+    for csv_file in csv_files:
+        inferred = infer_symbol_from_filename(csv_file.name)
+        if inferred and inferred in configured_set and inferred not in matches:
+            matches[inferred] = csv_file
+
+    for symbol in configured_symbols:
+        if symbol.upper() in matches:
+            continue
+        # Fallback to any filename containing symbol token boundaries.
+        token = re.escape(symbol.upper())
+        boundary_pattern = re.compile(rf"(^|[_-]){token}([_-]|$)")
+        for csv_file in csv_files:
+            stem_upper = csv_file.stem.upper()
+            if boundary_pattern.search(stem_upper):
+                matches[symbol.upper()] = csv_file
+                break
+
+    return matches
 
 def pct_rank_bucket(series: pd.Series, q: int) -> pd.Series:
     ranks = series.rank(method="first", pct=True)
@@ -165,13 +211,32 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     symbols = load_symbols(Path(args.config))
-    all_events = []
+
+    data_template = Path(args.data_template)
+    data_dir = data_template.parent if str(data_template.parent) != "" else Path("data")
+    symbol_to_csv = discover_symbol_csv_files(data_dir, symbols)
+
+    missing_symbols = [s for s in symbols if s.upper() not in symbol_to_csv]
+    if missing_symbols:
+        print(f"[warn] no local CSV discovered for configured symbols: {', '.join(missing_symbols)}")
+
+    if not symbol_to_csv:
+        raise FileNotFoundError(
+            "No matching symbol CSV files discovered for configured symbols. "
+            "Cannot continue because this would skip all symbols."
+        )
+
+    print("[info] selected symbol files:")
     for symbol in symbols:
-        csv_path = Path(args.data_template.format(symbol=symbol))
-        if not csv_path.exists():
-            print(f"[skip] missing data: {symbol} -> {csv_path}")
-            continue
-        all_events.append(extract_symbol_events(symbol, csv_path, args.range_percentile_buckets))
+        csv_path = symbol_to_csv.get(symbol.upper())
+        if csv_path is not None:
+            print(f"  - {symbol}: {csv_path}")
+
+    all_events = [
+        extract_symbol_events(symbol, symbol_to_csv[symbol.upper()], args.range_percentile_buckets)
+        for symbol in symbols
+        if symbol.upper() in symbol_to_csv
+    ]
 
     breach_events = pd.concat(all_events, ignore_index=True) if all_events else pd.DataFrame()
 
