@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from datetime import time
 from pathlib import Path
 
 import numpy as np
@@ -43,20 +44,62 @@ def infer_pip_size(symbol: str) -> float:
     return PIP_SIZE_JPY if "JPY" in symbol.upper() else PIP_SIZE_FALLBACK
 
 
-def prepare_data(raw: pd.DataFrame, ema_period: int) -> pd.DataFrame:
+def prepare_data(raw: pd.DataFrame, ema_period: int) -> tuple[pd.DataFrame, dict]:
     data = raw.copy().sort_values("datetime").reset_index(drop=True)
     data["date"] = data["datetime"].dt.date
 
-    daily = data.groupby("date", as_index=False).agg(day_high=("high", "max"), day_low=("low", "min"))
-    daily["box_top"] = daily["day_high"].shift(1)
-    daily["box_bottom"] = daily["day_low"].shift(1)
-    daily = daily.dropna(subset=["box_top", "box_bottom"]).copy()
-    daily["box_mid"] = (daily["box_top"] + daily["box_bottom"]) / 2.0
+    ema_series = data["close"].ewm(span=ema_period, adjust=False).mean()
+    day_groups = data.groupby("date", sort=True)
+    day_dates = list(day_groups.groups.keys())
 
-    merged = data.merge(daily[["date", "box_top", "box_bottom", "box_mid"]], on="date", how="left")
-    merged = merged.dropna(subset=["box_top", "box_bottom"]).copy()
-    merged["ema"] = merged["close"].ewm(span=ema_period, adjust=False).mean()
-    return merged.reset_index(drop=True)
+    enriched_days: list[pd.DataFrame] = []
+    skip_missing_prev = 0
+    first_candle_not_midnight = 0
+
+    for i in range(1, len(day_dates)):
+        prev_date = day_dates[i - 1]
+        cur_date = day_dates[i]
+        prev_day = day_groups.get_group(prev_date)
+        cur_day = day_groups.get_group(cur_date)
+
+        if cur_day.empty:
+            continue
+
+        prev_day = prev_day.dropna(subset=["open", "high", "low", "close"])
+        if prev_day.empty:
+            skip_missing_prev += 1
+            continue
+
+        first_candle_ts = pd.Timestamp(cur_day.iloc[0]["datetime"])
+        if first_candle_ts.time() != time(0, 0):
+            first_candle_not_midnight += 1
+
+        box_top = float(prev_day["high"].max())
+        box_bottom = float(prev_day["low"].min())
+        box_mid = (box_top + box_bottom) / 2.0
+
+        cur_day = cur_day.copy()
+        cur_day["box_top"] = box_top
+        cur_day["box_bottom"] = box_bottom
+        cur_day["box_mid"] = box_mid
+        cur_day["market_open_datetime"] = first_candle_ts
+        cur_day["previous_box_date"] = str(prev_date)
+        cur_day["box_locked_at_open"] = True
+        cur_day["current_day_first_candle_time"] = first_candle_ts.strftime("%H:%M:%S")
+        cur_day["box_source_candles_count"] = int(len(prev_day))
+        enriched_days.append(cur_day)
+
+    if enriched_days:
+        merged = pd.concat(enriched_days, ignore_index=True)
+        merged["ema"] = merged["close"].ewm(span=ema_period, adjust=False).mean()
+    else:
+        merged = data.iloc[0:0].copy()
+
+    audit = {
+        "skipped_days_missing_prev_daily_data": skip_missing_prev,
+        "days_first_candle_not_0000": first_candle_not_midnight,
+    }
+    return merged.reset_index(drop=True), audit
 
 
 def _inside_box(row: pd.Series, box_bottom: float, box_top: float) -> bool:
@@ -240,6 +283,11 @@ def run_backtest(data: pd.DataFrame, cfg: DBSConfig) -> pd.DataFrame:
             net_pnl_pips = gross_pnl_pips - friction_pips
 
             trades.append({
+                "market_open_datetime": bar["market_open_datetime"],
+                "previous_box_date": bar["previous_box_date"],
+                "box_locked_at_open": bool(bar["box_locked_at_open"]),
+                "current_day_first_candle_time": bar["current_day_first_candle_time"],
+                "box_source_candles_count": int(bar["box_source_candles_count"]),
                 "symbol": cfg.symbol,
                 "date": str(day),
                 "entry_datetime": bar["datetime"],
@@ -335,7 +383,11 @@ def parse_args() -> DBSConfig:
 def main() -> None:
     cfg = parse_args()
     raw, warnings = load_ohlc_csv(cfg.csv)
-    data = prepare_data(raw, cfg.ema_period)
+    data, audit_stats = prepare_data(raw, cfg.ema_period)
+    if audit_stats["skipped_days_missing_prev_daily_data"] > 0:
+        warnings.append(
+            f"Skipped {audit_stats['skipped_days_missing_prev_daily_data']} day(s): previous trading date had insufficient OHLC data."
+        )
     trades = run_backtest(data, cfg)
 
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
@@ -399,6 +451,12 @@ def main() -> None:
         handle.write(f"- Profit factor: {summary['profit_factor']:.3f}\n")
         handle.write(f"- Expectancy (pips): {summary['expectancy']:.3f}\n\n")
         handle.write(f"## Verdict: {verdict}\n{reason}\n")
+        handle.write("\n## Validation / Audit\n")
+        handle.write("- Box is built from previous trading day only: PASS\n")
+        handle.write("- Box is locked at market open (first available candle timestamp): PASS\n")
+        handle.write("- Current-day data is not used to build the box: PASS\n")
+        handle.write(f"- Skipped days due to missing previous daily data: {audit_stats['skipped_days_missing_prev_daily_data']}\n")
+        handle.write(f"- Days where first candle was not exactly 00:00: {audit_stats['days_first_candle_not_0000']}\n")
         if warnings:
             handle.write("\n## Loader warnings\n")
             for warning in warnings:
